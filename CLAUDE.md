@@ -44,13 +44,25 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
     cross-signed by ISRG Root X1). It verifies with X1 alone, and with Root YR
     alone. The server accepts TLS 1.2 with ECDHE-RSA-AES-GCM, which ESP-IDF 4.4's
     mbedTLS needs (it has no TLS 1.3). `ca_certs.h` holds X1, X2, YR and YE.
-- **Recorder firmware (2026-09-30):** builds (flash 1.17 of 2.5 MB). **Not yet
-  flashed or run**: needs a real `secrets.h` (Wi-Fi, URL, token) and the receiver
-  reachable.
-- Next: Jay fills in `secrets.h` (Wi-Fi and token; UPLOAD_URL is already set).
-  Then flash the recorder and test at home, on the hotspot, and offline (queue +
-  retry). Watch `docker logs -f m5recorder-receiver` on the server for
-  "received <id>" and "memo <id> -> <file>.md", and time the transcription.
+- **Recorder firmware: flashed and working end to end (2026-09-30)**, with
+  `secrets.h` filled in by Jay (gitignored):
+  - Memo 1 over the **phone hotspot** (Jay was away from home): note written with
+    a correct transcript. Transcribed about 5 s after upload for 4.8 s of audio.
+  - **Offline queue:** memos 2–4 recorded without Wi-Fi, then sent as one batch
+    over one keep-alive connection when the hotspot came back. The notes carry
+    the recording time (the clock was set by NTP earlier and survives deep
+    sleep). All transcripts correct.
+  - Transcription is about 0.7× the audio length on the MS-01 CPU; the VAD trims
+    about 1 s of silence per clip.
+  - **Not yet tested: home Wi-Fi.**
+- **Known slowness (next work):** each upload takes about 7 s for 160–200 KB
+  (about 25–30 KB/s). The likely cause is Wi-Fi modem sleep (on by default) plus
+  small writes. Away from home, the stick also spends about 8 s trying the home
+  SSID before the hotspot. Planned fix: scan first and join a known network in
+  range, turn Wi-Fi sleep off during uploads, write in bigger chunks, and log
+  the upload rate.
+- Other ideas: hide the Docker health-check lines in the receiver's access log.
+  Jay still has to set up sync for the Memex vault.
 
 ## Wake-latency experiment (history)
 
