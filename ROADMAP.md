@@ -113,8 +113,8 @@ than a vault note for status.
 - A low-battery and fault-reset guard, a "queue nearly full" warning, and quieter
   logs.
 - **Deployed and flashed; the device appeared in HA.**
-- **Still to do:** flash the queue-count fix (`6c27609`), see a heartbeat after
-  6 h, get a days-left estimate after a day or two, the home Wi-Fi test, then
+- The queue-count fix is flashed and confirmed in HA (Memos waiting 0).
+- **Still to do:** see a heartbeat after 6 h, get a days-left estimate after a day or two, the home Wi-Fi test, then
   merge to `main`.
 
 1. **Battery telemetry.** Stick:
