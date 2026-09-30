@@ -26,10 +26,17 @@ After carrying the stick for an evening:
 
 ## Phase 1: data safety (small, do first)
 
-**Built on branch `phase1-data-safety` (2026-09-30).** The receiver has 20 tests
-and was checked end to end locally, and the firmware builds. **Still to do:**
-deploy the receiver, flash the stick, test on the device, deliberately trigger
-the upload watchdog, then merge to `main`.
+**Done 2026-09-30** (branch `phase1-data-safety`).
+- The receiver is deployed on the MS-01 (the DB migrated itself; 20 tests).
+- The stick is flashed and tested by Jay:
+  - new ids (`<MAC>-<epoch>-<seq>`);
+  - deletion only on a `queued` reply;
+  - a placeholder note, then the transcript;
+  - DNS failure → "No internet" with a 15 min retry that fired on its own
+    despite pocket presses in between;
+  - NTP setting an unset clock.
+- **Left for when Jay is home:** deliberately trigger the upload watchdog (a
+  test server that accepts the connection and then stalls).
 
 1. **Unique memo ids** (all three reviews). The id `<MAC>-<seq>` restarts
    if NVS is wiped (full flash erase, or the Arduino core erasing NVS on
