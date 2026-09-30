@@ -2,7 +2,8 @@
 //
 // To record: press the front button (KEY1), release, then press and hold it
 // while talking; let go to stop. A single press, or a single press held down
-// (e.g. in a pocket), does nothing. The memo is saved to flash, then uploaded
+// (e.g. in a pocket), does nothing; the side button (KEY2) needs press,
+// release, press to show the status screen. The memo is saved to flash, then uploaded
 // over Wi-Fi (phone hotspot or home network) to the receiver on the home
 // server, which transcribes it into an Obsidian note. Memos that can't be sent
 // stay queued; the stick wakes on a timer to retry (15, 30, 60, then every
@@ -10,7 +11,7 @@
 //
 // Wake paths:
 //   KEY1 press (ext0)   gesture check -> record -> save -> upload -> sleep
-//   KEY2 press (ext1)   status screen (battery, storage, queue) -> sleep
+//   KEY2 press (ext1)   gesture check -> status screen (battery, storage, queue) -> sleep
 //   button release      (only if a button was held at sleep) straight back to sleep
 //   timer               upload queued memos with the screen off -> sleep
 //   power on            show status, upload anything queued -> sleep
@@ -130,12 +131,12 @@ struct Gesture {
   size_t      press2_index;  // sample index at the second press
 };
 
-// Waits until KEY1 has been at `level` for DEBOUNCE_MS. Returns when it first
+// Waits until `pin` has been at `level` for DEBOUNCE_MS. Returns when it first
 // got there (ms since app start), or 0 if `deadline` passes first.
-uint32_t waitKey1(int level, uint32_t deadline) {
+uint32_t waitKey(gpio_num_t pin, int level, uint32_t deadline) {
   uint32_t since = 0;
   while ((int32_t)(deadline - millis()) > 0) {
-    if (digitalRead(PIN_KEY1) == level) {
+    if (digitalRead(pin) == level) {
       if (!since) { since = millis(); }
       if (millis() - since >= DEBOUNCE_MS) { return since; }
     } else {
@@ -146,25 +147,28 @@ uint32_t waitKey1(int level, uint32_t deadline) {
   return 0;
 }
 
-// Press, release, press and hold. The first press is what woke the stick.
-Gesture detectGesture() {
-  Gesture g{false, "", digitalRead(PIN_KEY1) == LOW, 0, 0, 0};
+// Press, release, press on `pin`; the first press is what woke the stick.
+// (For KEY1 the second press is then held to record; see audio::arm().)
+Gesture detectGesture(gpio_num_t pin) {
+  Gesture g{false, "", digitalRead(pin) == LOW, 0, 0, 0};
   g.released_ms = millis();
   if (g.down_at_start) {
-    g.released_ms = waitKey1(HIGH, TAP_MAX_MS);
+    g.released_ms = waitKey(pin, HIGH, TAP_MAX_MS);
     if (!g.released_ms) {
       g.why = "held (single press and hold)";
       return g;
     }
   }
-  g.pressed_ms = waitKey1(LOW, g.released_ms + GAP_MAX_MS);
+  g.pressed_ms = waitKey(pin, LOW, g.released_ms + GAP_MAX_MS);
   if (!g.pressed_ms) {
     g.why = "no second press (single press)";
     return g;
   }
-  const size_t now = audio::currentIndex();
-  const size_t back = (millis() - g.pressed_ms) * audio::SAMPLE_RATE / 1000;
-  g.press2_index = now > back ? now - back : 0;
+  if (pin == PIN_KEY1) {
+    const size_t now = audio::currentIndex();
+    const size_t back = (millis() - g.pressed_ms) * audio::SAMPLE_RATE / 1000;
+    g.press2_index = now > back ? now - back : 0;
+  }
   g.ok = true;
   return g;
 }
@@ -265,7 +269,7 @@ void showStatus(bool fs_ok) {
   M5.Display.setBrightness(BRIGHTNESS);
   showStatus(fs_ok);
   const uint32_t retry = fs_ok && memo_queue::count() > 0 ? retry_minutes : 0;
-  bool key2_armed = false;  // ignore the press that woke us until it's released
+  bool key2_armed = false;  // ignore the gesture's second press until it's released
   const uint32_t start = millis();
   while (millis() - start < STATUS_MS) {
     if (digitalRead(PIN_KEY1) == LOW) { sleepNow(retry, true); }
@@ -372,9 +376,18 @@ void setup() {
   const bool recording = cause == ESP_SLEEP_WAKEUP_EXT0;
   bool mic_ok = false;
   Gesture g{};
+  // KEY2: the status screen needs the same press, release, press, so pocket
+  // presses on the side button don't light the screen either.
+  if (cause == ESP_SLEEP_WAKEUP_EXT1) {
+    g = detectGesture(PIN_KEY2);
+    if (!g.ok) {
+      ++ignored_presses;
+      deepSleep(armed_minutes);
+    }
+  }
   if (recording) {
     mic_ok = audio::start(PIN_KEY1);
-    g = detectGesture();
+    g = detectGesture(PIN_KEY1);
     if (!g.ok) {
       ++ignored_presses;
       audio::stop();

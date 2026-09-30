@@ -101,6 +101,10 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
     status screen. The memo keeps 0.25 s of pre-roll before the second press.
     Max 60 s. Limit: a very fast double press whose second press is already
     down at app start is rejected. Tune from the `gesture:` serial log.
+  - **The side button is guarded the same way** (Jay, 2026-09-30): press,
+    release, press opens the status screen (no hold needed). A rejected KEY2
+    press sleeps at once and counts as ignored. Before, a pocket press lit the
+    screen for 5 s (about 0.08 mAh, roughly 8x a rejected KEY1 press).
   - **Held buttons**: `deepSleep()` arms ext0/ext1 to wake on *release* for a
     button that's held (an RTC flag says so), and that wake sleeps again at once.
     Before this, `sleepNow()` spun awake until release.

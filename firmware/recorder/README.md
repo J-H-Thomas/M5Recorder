@@ -34,7 +34,9 @@ turns it into a transcribed note in Obsidian.
 | **Bad token** | The receiver rejected `MEMO_TOKEN`; memos are kept. |
 | **Queue full** | About 2.8 minutes of audio are waiting; new memos can't be saved until they're sent. |
 
-- **Side button (KEY2): status screen** for 5 s (press again to close):
+- **Side button (KEY2): press, release, press** for the status screen (5 s;
+  press again to close). A single press does nothing, so it can't light the
+  screen in a pocket either. The status screen shows:
   - Battery % with its voltage and whether it's charging. The % is estimated
     from voltage (the StickS3 has no fuel gauge), so treat it as approximate;
     it reads high while charging.
