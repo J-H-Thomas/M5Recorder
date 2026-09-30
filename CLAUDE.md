@@ -26,7 +26,7 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
 - **`v0.1.0-mvp`** (git tag, 2026-09-30): the first version that works end to end
   in daily use, before the post-review roadmap.
   - Stick: the exact flashed image (built with the real secrets, so private) is
-    in `C:/AI Working/M5Recorder-backups/v0.1.0-mvp/`, outside any repo, with0.1.0-mvp\`, outside any repo, with
+    in `C:/AI Working/M5Recorder-backups/v0.1.0-mvp/`, outside any repo, with
     `RESTORE.md` (esptool command) and SHA256SUMS. Or check out the tag, restore
     `secrets.h` and `pio run -t upload`.
   - Server: the Unraid image should be tagged `m5recorder-receiver:v0.1.0-mvp`
