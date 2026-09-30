@@ -67,8 +67,9 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
   storage free % and minutes left, and the queue count. "BATTERY LOW" (≤20%)
   appears after saving. Builds; not yet run on the device.
 - **Wi-Fi scan-first and faster uploads (2026-09-30):** one async scan, then
-  join the first listed SSID in range, on its channel and BSSID (hidden SSIDs
-  are unsupported). Wi-Fi sleep is off, and each memo is read into PSRAM and
+  join the first listed SSID in range, on its channel and BSSID. If none is
+  seen, try each by name (6 s each). First field test: the scan saw 0 networks
+  while Jay's S25+ hotspot was on (probably set to hidden), so the fallback is needed. Wi-Fi sleep is off, and each memo is read into PSRAM and
   sent in one write (streaming a File went out in 1460-byte TLS records). The
   Sent screen and serial log show KB/s. Builds; not yet run on the device.
 - Other ideas: hide the Docker health-check lines in the receiver's access log.

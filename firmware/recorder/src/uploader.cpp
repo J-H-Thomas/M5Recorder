@@ -14,30 +14,53 @@ namespace uploader {
 namespace {
 
 constexpr uint32_t SCAN_TIMEOUT_MS    = 5000;
-constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;
+constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;  // a network the scan found
+constexpr uint32_t BLIND_TIMEOUT_MS   = 6000;  // a network the scan didn't find (hidden?)
 constexpr uint32_t NTP_TIMEOUT_MS     = 3000;
 constexpr uint32_t HTTP_TIMEOUT_MS    = 20000;
 constexpr time_t   CLOCK_VALID_AFTER  = 1700000000;  // Nov 2023
 
 bool keyDown(gpio_num_t key) { return digitalRead(key) == LOW; }
 
+// Waits for a WiFi.begin() to connect. False on timeout or KEY1.
+bool waitConnected(gpio_num_t key, const char* ssid, uint32_t timeout_ms) {
+  const uint32_t t0 = millis();
+  while (millis() - t0 < timeout_ms) {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("wifi: connected to %s in %lu ms (RSSI %d)\n", ssid,
+                    (unsigned long)(millis() - t0), WiFi.RSSI());
+      return true;
+    }
+    if (keyDown(key)) { return false; }
+    delay(20);
+  }
+  Serial.printf("wifi: %s didn't connect\n", ssid);
+  WiFi.disconnect();
+  return false;
+}
+
 // Scans once and joins the first network in WIFI_NETWORKS that is in range
 // (list order = preference), on the channel and access point the scan found.
-// If none is in range it gives up straight away rather than waiting on each.
-// Hidden networks don't show in a scan, so they aren't supported.
+// If the scan finds none of them, tries each by name, which also finds
+// hidden networks (a phone hotspot may be set to hidden).
 bool connect(gpio_num_t key) {
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // modem sleep throttles uploads badly; it's off only while awake anyway
 
   const uint32_t t0 = millis();
-  WiFi.scanNetworks(true, false, false, 120);  // async, active scan, 120 ms per channel
+  const int16_t started = WiFi.scanNetworks(true, false, false, 120);  // async, active, 120 ms per channel
   int16_t found = WIFI_SCAN_RUNNING;
   while ((found = WiFi.scanComplete()) == WIFI_SCAN_RUNNING && millis() - t0 < SCAN_TIMEOUT_MS) {
     if (keyDown(key)) { WiFi.scanDelete(); return false; }
     delay(20);
   }
+  Serial.printf("wifi: scan start %d, result %d after %lu ms\n", started, found,
+                (unsigned long)(millis() - t0));
   if (found < 0) { found = 0; }
+  for (int i = 0; i < found && i < 12; ++i) {
+    Serial.printf("  %-32s ch %2ld  %4ld dBm\n", WiFi.SSID(i).c_str(), (long)WiFi.channel(i), (long)WiFi.RSSI(i));
+  }
 
   const WifiNetwork* chosen = nullptr;
   int best = -1;
@@ -47,29 +70,27 @@ bool connect(gpio_num_t key) {
     }
     if (best >= 0) { chosen = &net; break; }
   }
-  Serial.printf("wifi: scan %lu ms, %d networks, using %s\n", (unsigned long)(millis() - t0),
-                found, chosen ? chosen->ssid : "none");
-  if (!chosen) {
+
+  if (chosen) {
+    const int32_t channel = WiFi.channel(best);
+    uint8_t bssid[6];
+    memcpy(bssid, WiFi.BSSID(best), sizeof(bssid));
     WiFi.scanDelete();
-    return false;
+    WiFi.begin(chosen->ssid, chosen->password, channel, bssid);
+    if (waitConnected(key, chosen->ssid, CONNECT_TIMEOUT_MS)) { return true; }
+    if (keyDown(key)) { return false; }
+  } else {
+    WiFi.scanDelete();
   }
 
-  const int32_t channel = WiFi.channel(best);
-  uint8_t bssid[6];
-  memcpy(bssid, WiFi.BSSID(best), sizeof(bssid));
-  WiFi.scanDelete();
-  WiFi.begin(chosen->ssid, chosen->password, channel, bssid);
-  const uint32_t t1 = millis();
-  while (millis() - t1 < CONNECT_TIMEOUT_MS) {
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("wifi: connected to %s in %lu ms (RSSI %d)\n", chosen->ssid,
-                    (unsigned long)(millis() - t1), WiFi.RSSI());
-      return true;
-    }
+  // Not seen by the scan (hidden, or missed): try each by name.
+  for (const auto& net : WIFI_NETWORKS) {
+    if (&net == chosen) { continue; }
+    Serial.printf("wifi: trying %s by name\n", net.ssid);
+    WiFi.begin(net.ssid, net.password);
+    if (waitConnected(key, net.ssid, BLIND_TIMEOUT_MS)) { return true; }
     if (keyDown(key)) { return false; }
-    delay(20);
   }
-  Serial.printf("wifi: %s didn't connect\n", chosen->ssid);
   return false;
 }
 
