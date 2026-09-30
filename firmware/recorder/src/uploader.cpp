@@ -13,51 +13,80 @@
 namespace uploader {
 namespace {
 
-constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;  // per network
-constexpr uint32_t STALE_STATUS_MS    = 1000;  // ignore "not found" this soon after begin()
+constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;   // first attempt at each network
+constexpr uint32_t RETRY_TIMEOUT_MS   = 12000;  // second attempt at one that timed out
+constexpr uint32_t STALE_STATUS_MS    = 1000;   // ignore "not found" this soon after begin()
 constexpr uint32_t NTP_TIMEOUT_MS     = 3000;
+constexpr uint32_t HTTP_TIMEOUT_MS    = 20000;
+constexpr time_t   CLOCK_VALID_AFTER  = 1700000000;  // Nov 2023
 constexpr int      NETWORK_COUNT      = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
 
 // The network that last worked, tried first next time (survives deep sleep).
 RTC_DATA_ATTR int8_t last_network = -1;
-constexpr uint32_t HTTP_TIMEOUT_MS    = 20000;
-constexpr time_t   CLOCK_VALID_AFTER  = 1700000000;  // Nov 2023
+
+// Latest disconnect reason from the Wi-Fi driver (wifi_err_reason_t), for the log.
+volatile uint8_t last_reason = 0;
+
+enum class Attempt { Connected, NotFound, Refused, TimedOut, Aborted };
 
 bool keyDown(gpio_num_t key) { return digitalRead(key) == LOW; }
 
+void logDisconnects() {
+  static bool registered = false;
+  if (registered) { return; }
+  registered = true;
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    last_reason = info.wifi_sta_disconnected.reason;
+    Serial.printf("wifi: disconnected, reason %u (%s)\n", last_reason,
+                  WiFi.disconnectReasonName((wifi_err_reason_t)last_reason));
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+}
+
 // Joins one network by name. The Wi-Fi driver scans for it itself and reports
 // "no such network" after a couple of seconds, so an absent network costs
-// that, not the full timeout. False on failure, timeout or KEY1.
-bool tryNetwork(gpio_num_t key, const WifiNetwork& net) {
+// that, not the full timeout.
+Attempt tryNetwork(gpio_num_t key, const WifiNetwork& net, uint32_t timeout_ms) {
   const uint32_t t0 = millis();
+  last_reason = 0;
   WiFi.begin(net.ssid, net.password);
-  while (millis() - t0 < CONNECT_TIMEOUT_MS) {
+  Attempt result = Attempt::TimedOut;
+  while (millis() - t0 < timeout_ms) {
     const wl_status_t s = WiFi.status();
     if (s == WL_CONNECTED) {
       Serial.printf("wifi: connected to %s in %lu ms (RSSI %d)\n", net.ssid,
                     (unsigned long)(millis() - t0), WiFi.RSSI());
-      return true;
+      return Attempt::Connected;
     }
     if (millis() - t0 > STALE_STATUS_MS && (s == WL_NO_SSID_AVAIL || s == WL_CONNECT_FAILED)) {
-      Serial.printf("wifi: %s %s after %lu ms\n", net.ssid,
-                    s == WL_NO_SSID_AVAIL ? "not found" : "refused (password?)",
-                    (unsigned long)(millis() - t0));
+      result = s == WL_NO_SSID_AVAIL ? Attempt::NotFound : Attempt::Refused;
       break;
     }
-    if (keyDown(key)) { break; }
+    if (keyDown(key)) {
+      result = Attempt::Aborted;
+      break;
+    }
     delay(20);
   }
-  if (millis() - t0 >= CONNECT_TIMEOUT_MS) { Serial.printf("wifi: %s timed out\n", net.ssid); }
-  WiFi.disconnect();
-  return false;
+  static const char* const names[] = {"connected", "not found", "refused", "timed out", "aborted"};
+  Serial.printf("wifi: %s %s after %lu ms (last reason %u)\n", net.ssid, names[(int)result],
+                (unsigned long)(millis() - t0), last_reason);
+  // Reset the driver's connection state so the next attempt starts clean.
+  WiFi.disconnect(true);
+  delay(100);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  return result;
 }
 
 // Tries the network that worked last time first (so away from home the
 // hotspot goes first, at home the home network), then the rest in
-// WIFI_NETWORKS order. (A scan-first approach was dropped: the Arduino
-// core gives up on a scan after 20x the per-channel time, 2.4 s at
-// 120 ms, and reported that as zero networks.)
+// WIFI_NETWORKS order. Then any that timed out (in range but slow, e.g. a
+// phone hotspot still clearing the previous connection) get one longer try.
+// (A scan-first approach was dropped: the Arduino core gives up on a scan
+// after 20x the per-channel time, 2.4 s at 120 ms, and reported that as zero
+// networks.)
 bool connect(gpio_num_t key) {
+  logDisconnects();
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // modem sleep throttles uploads badly; it's off only while awake anyway
@@ -68,12 +97,25 @@ bool connect(gpio_num_t key) {
   for (int i = 0; i < NETWORK_COUNT; ++i) {
     if (i != last_network) { order[n++] = i; }
   }
+  bool timed_out[NETWORK_COUNT] = {};
   for (int k = 0; k < n; ++k) {
-    if (tryNetwork(key, WIFI_NETWORKS[order[k]])) {
+    const Attempt a = tryNetwork(key, WIFI_NETWORKS[order[k]], CONNECT_TIMEOUT_MS);
+    if (a == Attempt::Connected) {
       last_network = order[k];
       return true;
     }
-    if (keyDown(key)) { return false; }
+    if (a == Attempt::Aborted) { return false; }
+    timed_out[k] = a == Attempt::TimedOut;
+  }
+  for (int k = 0; k < n; ++k) {
+    if (!timed_out[k]) { continue; }
+    Serial.printf("wifi: retrying %s\n", WIFI_NETWORKS[order[k]].ssid);
+    const Attempt a = tryNetwork(key, WIFI_NETWORKS[order[k]], RETRY_TIMEOUT_MS);
+    if (a == Attempt::Connected) {
+      last_network = order[k];
+      return true;
+    }
+    if (a == Attempt::Aborted) { return false; }
   }
   return false;
 }
