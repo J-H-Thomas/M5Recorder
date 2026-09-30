@@ -65,7 +65,7 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
   stick via ext1 (alongside ext0 on KEY1) and shows battery % (M5Unified's
   voltage-based estimate via the M5PM1, plus volts and charging state),
   storage free % and minutes left, and the queue count. "BATTERY LOW" (≤20%)
-  appears after saving. Builds; not yet run on the device.
+  appears after saving.
 - **Wi-Fi joining and faster uploads (2026-09-30):** a scan-first version saw
   "0 networks" in the field. The cause: the Arduino core ends an async scan after
   20x max_ms_per_chan (2.4 s at 120 ms) and `scanComplete()` then reports
@@ -76,6 +76,19 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
   sleep is off, and each memo is read into PSRAM and sent in one write (a File
   stream went out in 1460-byte TLS records). The Sent screen and serial log
   show KB/s. Jay's hotspot is now 2.4 GHz only (it was mixed 2.4/5).
+  - One field failure: a memo about 7 s after the previous one timed out joining
+    the hotspot (not refused, not "not found"). Since then, a network that
+    timed out gets one 12 s retry after a Wi-Fi reset, and the driver's
+    disconnect reasons are logged.
+  - **Field test after that (2026-09-30): 4 memos, 13–18 s apart, all joined
+    the hotspot in about 1 s at the first attempt** (no retry needed), and
+    uploaded in 3.3–4.4 s each (97–194 KB). Most of that is the TLS handshake:
+    one per wake, and the server has a 4096-bit RSA key. Within one connection,
+    later memos reach about 60 KB/s. A memo reaches the server about 5 s after
+    release (it was about 15 s). Reusing the TLS session across sleeps could cut
+    this further; not done. Reason 8 (ASSOC_LEAVE) in the log is the stick's
+    own disconnect before sleep.
+  - The KEY2 status screen works on the device (Jay, 2026-09-30).
 - Other ideas: hide the Docker health-check lines in the receiver's access log.
   Jay still has to set up sync for the Memex vault.
 
