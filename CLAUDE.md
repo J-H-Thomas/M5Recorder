@@ -140,6 +140,28 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
   the PM1 keeps it through deep sleep. It probably drew more than the rest of
   the sleeping stick.
 
+**Status in Home Assistant** (Phase 2):
+- The stick sends `X-Battery-mV/-Pct`, `X-Charging`, `X-Queue` (memos left
+  after this one), `X-Set-Aside`, `X-Ignored` and `X-Firmware` (`git describe`,
+  via `version_flag.py`) on every upload. When there has been no report for 6 h,
+  a timer wake does `POST /heartbeat` (`heartbeat_deadline` in RTC memory,
+  alongside `retry_deadline`).
+- The battery is read after `M5.begin()`, before Wi-Fi. There's no Wi-Fi below
+  3.45 V (not charging) or after a brownout/crash reset.
+- The receiver stores reports in a `telemetry` table and publishes MQTT
+  discovery (`app/ha.py`) to HA's Mosquitto broker on the HA box (10.10.1.2:1883,
+  HA user `m5recorder`, password in the receiver's `.env`). Entities are
+  `sensor.m5recorder_*` and `binary_sensor.m5recorder_charging`, and their
+  availability is the receiver's MQTT last will.
+- "Estimated days left" is a least-squares battery trend since the last charge
+  (`telemetry.days_left`).
+- Five automations (created through the HA MCP, notify
+  `mobile_app_james_s25`): `automation.m5recorder_no_check_in_for_24_h`,
+  `_battery_low`, `_transcription_failed`, `_receiver_offline`,
+  `_memos_stuck_transcribing`. The battery one keeps a template condition on
+  purpose: it rejects a jump from unavailable/unknown, and numeric_state has no
+  `not_from`.
+
 **Receiver** (`server/app`):
 - The token is checked first (constant-time).
 - Upload checks: the id and device headers must be `[A-Za-z0-9_-]`; the audio

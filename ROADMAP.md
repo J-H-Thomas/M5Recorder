@@ -102,6 +102,21 @@ After carrying the stick for an evening:
 
 ## Phase 2: know that it's working
 
+**Built 2026-09-30 (branch `phase2-status`).** Jay chose Home Assistant rather
+than a vault note for status.
+- The receiver publishes an **M5Recorder** device over MQTT discovery (12
+  sensors) to HA's Mosquitto broker. The stick reports with every upload and
+  heartbeats every 6 h.
+- Five HA automations notify the S25: no check-in for 24 h, battery < 21 %
+  (not charging), a failed transcription, the receiver offline for 10 min, and
+  memos stuck transcribing for 1 h.
+- A low-battery and fault-reset guard, a "queue nearly full" warning, and quieter
+  logs.
+- **Deployed and flashed; the device appeared in HA.**
+- **Still to do:** flash the queue-count fix (`6c27609`), see a heartbeat after
+  6 h, get a days-left estimate after a day or two, the home Wi-Fi test, then
+  merge to `main`.
+
 1. **Battery telemetry.** Stick:
    - Read the battery at wake, before Wi-Fi (TX sags the voltage).
    - Send `X-Battery-mV`, `X-Battery-Pct`, `X-Charging`, `X-Queue` and
