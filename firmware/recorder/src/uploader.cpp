@@ -283,7 +283,8 @@ Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck, const Teleme
       break;
     }
     http.begin(tls, UPLOAD_URL);
-    addCommonHeaders(http, device, telemetry, remaining);
+    // Queue as it will be once this memo is in: what's still waiting on the stick.
+    addCommonHeaders(http, device, telemetry, remaining - 1);
     http.addHeader("Content-Type", "audio/wav");
     http.addHeader("X-Memo-Id", memoId(device, e));
     http.addHeader("X-Memo-Time", String(e.time));
