@@ -1,10 +1,40 @@
 # M5Recorder — project handoff notes
 
 Push-to-talk voice memo recorder on an **M5StickS3**. Hold the button → record →
-release → upload → transcribe on a computer (Whisper) → Markdown notes.
-The user is now working locally with the device on USB.
+release → upload → transcribe on the home server (Whisper) → Obsidian notes.
+The user (Jay) works locally with the device on USB (COM port changes between
+normal and download mode; find it by USB VID 303A).
+
+```
+stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hotspot)
+  ─► HTTPS POST https://memos.<domain>/upload (Bearer token)
+  ─► Pangolin (Newt tunnel, no router ports) ─► MS-01 (Unraid) receiver container
+  ─► faster-whisper ─► <vault>/Memos/<date time>.md with the audio embedded
+```
+
+## Layout
+
+- `firmware/recorder/`: the real firmware (fast-wake recording, flash queue,
+  Wi-Fi + HTTPS upload, 15 min retry timer). `include/secrets.h` is gitignored
+  (copy `secrets.example.h`). See its README.
+- `server/`: receiver (FastAPI + faster-whisper, Docker). `pytest` in `server/`
+  (venv in `server/.venv`). See its README for Unraid and Pangolin setup.
+- `firmware/wake_test/`: the wake-latency experiment the recorder is based on.
 
 ## Status
+
+- **Receiver (2026-09-30):** 10 tests pass. Run locally end to end with the
+  `base` model: a TTS test memo was transcribed word for word; the retry-on-restart
+  and duplicate-id paths were checked live. **Not yet deployed** on the MS-01, and
+  there's no Pangolin resource yet.
+- **Recorder firmware (2026-09-30):** builds (flash 1.17 of 2.5 MB). **Not yet
+  flashed or run**: needs a real `secrets.h` (Wi-Fi, URL, token) and the receiver
+  reachable.
+- Next: Jay deploys the receiver on Unraid and adds the Pangolin resource. Test
+  with curl from outside, flash the recorder, then test at home, on the hotspot,
+  and offline (queue + retry).
+
+## Wake-latency experiment (history)
 
 - `firmware/wake_test/` — PlatformIO test firmware that measures how much speech is
   lost between pressing KEY1 and the mic delivering real audio after deep sleep.
@@ -24,13 +54,26 @@ The user is now working locally with the device on USB.
   most times. speech +0 means the user was already talking at the first sample,
   so the remaining misses come from ROM + bootloader + Arduino start-up before
   `setup()`, which the app can't see.
-- Next: measure the sleep-current cost of keeping L3B on; optionally cut boot time
-  before `setup()` (bootloader image check on wake, PSRAM memtest, log level: these
-  need a custom sdkconfig, e.g. pioarduino / Arduino as an ESP-IDF component).
-- After that: build the real recorder firmware (step 1) and the computer-side
-  receiver + Whisper (step 2). A phone link is deferred.
+- "One" is now clipped only sometimes (Jay, 2026-09-30); good enough for now.
+- Parked: the sleep-current cost of keeping L3B on (Jay: 2+ days of battery is
+  fine; optimise once it works). Cutting boot time before `setup()` (bootloader
+  image check on wake, PSRAM memtest, log level) needs a custom sdkconfig, e.g.
+  pioarduino or Arduino as an ESP-IDF component.
 
 ## Decisions so far
+
+- **Transport (2026-09-30): Wi-Fi to home or the phone hotspot, not BLE.** The
+  ESP32-S3 has BLE only (no Classic BT). BLE would need a custom Android app kept
+  alive in the background on Samsung, and it's slow.
+- **Reaching home: Jay's existing Pangolin tunnel.** Not the phone's Tailscale:
+  on non-rooted Android, hotspot clients' traffic doesn't go through the VPN
+  (tailscale issues #14980, #15114). Pangolin login is bypassed for `/upload`
+  and `/health`; the receiver checks a bearer token (at least 24 characters).
+- **Transcription on the MS-01, not the phone** (faster-whisper; CPU int8 by
+  default; it's unknown whether the MS-01 has a GPU). The phone is only the network.
+- **Notes go into Jay's Obsidian vault**, one per memo, with the audio embedded
+  (vault path on Unraid still to be given).
+- Battery: 2+ days per charge is acceptable for now.
 
 - **Wake approach: ESP32 deep sleep, ext0 wake on KEY1 (G11, front button).**
   KEY1 cannot power the device on from full power-off — only the separate PMIC
@@ -38,9 +81,8 @@ The user is now working locally with the device on USB.
   2 mAh/day, so it isn't worth using the small side power button to record.
 - Record to flash/PSRAM first, upload afterwards over Wi-Fi to a small server on
   the user's computer; queue memos when Wi-Fi is unavailable. No live streaming.
-- Transcription: local Whisper is the default suggestion. The user hasn't
-  confirmed this vs. a cloud service yet — ask.
-- Ignore presses under about 0.5 s. Keep the LCD backlight off while recording.
+- Ignore presses under about 0.5 s. Keep the LCD backlight off while recording
+  (deferred: the red REC screen stays on for now to help testing).
 
 ## Hardware facts (from the sticker, docs.m5stack.com/en/core/StickS3, M5PM1 datasheet v1.9, schematic V0.6)
 

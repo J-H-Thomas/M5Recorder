@@ -1,0 +1,100 @@
+# M5Recorder receiver
+
+Receives voice memos from the M5StickS3, transcribes them with
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper), and writes one
+Markdown note per memo into an Obsidian vault, with the audio embedded.
+
+```
+stick ── HTTPS ──► Pangolin ──► Newt tunnel ──► this container (MS-01)
+                                                 ├─ <vault>/Memos/audio/2026-09-30 141205.wav
+                                                 └─ <vault>/Memos/2026-09-30 141205.md
+```
+
+## API
+
+- `POST /upload`: body is a WAV file. Headers:
+  - `Authorization: Bearer <MEMO_TOKEN>`
+  - `X-Memo-Id`: unique per memo (`<device MAC>-<sequence>`). Re-sending the
+    same id returns `{"status": "duplicate"}`, so the stick can safely retry.
+  - `X-Memo-Time`: Unix time at recording. `0` (clock not set) means the
+    receive time is used.
+  - `X-Memo-Device` (optional): defaults to the part of the id before the last `-`.
+
+  Returns `{"status": "queued"}` as soon as the audio is saved. Transcription
+  runs in the background, one memo at a time.
+- `GET /health`: `{"ok": true, "unfinished": <memos not yet transcribed>}`.
+
+Transcriptions that fail are retried the next time the container starts.
+
+## Note format
+
+```markdown
+---
+created: 2026-09-30T14:12:05+01:00
+duration: 12.4
+device: 14c19fd4eb98
+memo_id: 14c19fd4eb98-17
+tags: [memo]
+---
+![[Memos/audio/2026-09-30 141205.wav]]
+
+Remember to book the car in for its MOT next week.
+```
+
+## Settings (environment variables)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `MEMO_TOKEN` | (required) | At least 24 characters. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`; the same value goes in the firmware's `secrets.h`. |
+| `TZ` | `UTC` | Time zone for note names and `created`, e.g. `Europe/London`. |
+| `NOTES_SUBDIR` | `Memos` | Folder inside the vault for notes. |
+| `AUDIO_SUBDIR` | `Memos/audio` | Folder inside the vault for the WAV files. |
+| `WHISPER_MODEL` | `large-v3-turbo` | Any faster-whisper model name. `small` or `base` are faster and less accurate. |
+| `WHISPER_DEVICE` | `auto` | `cpu`, `cuda` or `auto`. |
+| `WHISPER_COMPUTE` | `int8` | `int8` on CPU; `float16` or `int8_float16` on an NVIDIA GPU. |
+| `LANGUAGE` | `en` | Empty for auto-detect. |
+| `MAX_UPLOAD_MB` | `20` | About 10 minutes of 16 kHz audio. |
+
+Volumes: `/vault` (the Obsidian vault), `/data` (the memo database), and
+`/models` (downloaded Whisper models, about 1.6 GB for large-v3-turbo; the
+model downloads on the first memo).
+
+## Deploy on Unraid
+
+1. Copy this `server/` folder to the MS-01 (e.g. `/mnt/user/appdata/m5recorder/src`)
+   and build the image in the Unraid terminal:
+   `docker build -t m5recorder-receiver /mnt/user/appdata/m5recorder/src`.
+2. Add a container (Docker → Add Container) with repository
+   `m5recorder-receiver`, and the port, variables and paths from
+   `docker-compose.yml`. Run it as `99:100` (Extra Parameters: `--user 99:100`)
+   so the files it writes into the vault are owned like the rest of the share.
+   Alternatively, use `docker compose up -d --build` in that folder with the
+   Compose Manager plugin.
+3. Check `http://<ms01>:8080/health` on the LAN.
+
+## Pangolin
+
+Add a resource for the receiver, e.g. `memos.<your domain>` → `http://<ms01 LAN IP>:8080`
+through the site whose Newt runs on the home network. The stick can't sign in
+through Pangolin's login page, so either turn authentication off for this
+resource, or keep it on and add rules that **bypass auth for the paths
+`/upload` and `/health`**. The receiver's token check is what protects it.
+Then, from outside the home network (a phone on mobile data):
+
+```sh
+curl https://memos.<domain>/health
+curl -i -X POST https://memos.<domain>/upload                 # expect 401
+```
+
+## Run locally (development)
+
+```sh
+cd server
+python -m venv .venv
+.venv/Scripts/pip install -r requirements-dev.txt   # Windows; .venv/bin/pip elsewhere
+.venv/Scripts/python -m pytest
+MEMO_TOKEN=... VAULT_DIR=./vault DATA_DIR=./data WHISPER_MODEL=base \
+  .venv/Scripts/uvicorn --factory app.main:build --port 8080
+curl -H "Authorization: Bearer $MEMO_TOKEN" -H "X-Memo-Id: test-1" \
+  --data-binary @memo.wav http://127.0.0.1:8080/upload
+```

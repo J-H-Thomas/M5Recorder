@@ -1,0 +1,8 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+faster-whisper==1.1.1
+# faster-whisper 1.1.1 imports requests, which huggingface-hub 1.x no longer
+# pulls in, and it was written against the 0.x download API.
+huggingface-hub>=0.26,<1
+requests>=2.32,<3
+tzdata==2025.2

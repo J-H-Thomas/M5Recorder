@@ -1,2 +1,10 @@
 .pio/
 .vscode/
+
+# receiver
+.venv/
+__pycache__/
+.pytest_cache/
+
+# firmware secrets (copy secrets.example.h)
+firmware/*/include/secrets.h

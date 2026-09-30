@@ -1,0 +1,24 @@
+# Reference setup; on Unraid the same values go into the container template
+# (see README.md). Paths on the left are examples.
+services:
+  memos:
+    build: .
+    image: m5recorder-receiver
+    container_name: m5recorder-receiver
+    restart: unless-stopped
+    user: "99:100"            # Unraid nobody:users, so the vault files stay editable
+    ports:
+      - "8080:8080"
+    environment:
+      MEMO_TOKEN: "change-me-to-a-long-random-string"   # python -c "import secrets; print(secrets.token_urlsafe(32))"
+      TZ: "Europe/London"
+      NOTES_SUBDIR: "Memos"
+      AUDIO_SUBDIR: "Memos/audio"
+      WHISPER_MODEL: "large-v3-turbo"
+      WHISPER_DEVICE: "cpu"
+      WHISPER_COMPUTE: "int8"
+      LANGUAGE: "en"
+    volumes:
+      - /mnt/user/obsidian/MyVault:/vault
+      - /mnt/user/appdata/m5recorder/data:/data
+      - /mnt/user/appdata/m5recorder/models:/models
