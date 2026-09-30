@@ -163,6 +163,46 @@ bool waitClockSync(uint32_t ms) {
   return ntp_synced;
 }
 
+void configureTls(WiFiClientSecure& tls, HTTPClient& http) {
+  tls.setCACert(CA_CERTS);
+  // The core's defaults (120 s handshake, 30 s reads) left the stick stuck on
+  // "Sending..." for minutes on a hotspot with no internet.
+  tls.setHandshakeTimeout(TLS_HANDSHAKE_S);
+  tls.setTimeout(TLS_TIMEOUT_S);
+  http.setReuse(true);  // one TLS handshake for the whole queue
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+}
+
+void addCommonHeaders(HTTPClient& http, const String& device, const Telemetry& t, size_t queued) {
+  const time_t now = time(nullptr);
+  http.addHeader("Authorization", String("Bearer ") + MEMO_TOKEN);
+  http.addHeader("X-Memo-Device", device);
+  http.addHeader("X-Device-Now", String(now > CLOCK_VALID_AFTER ? (uint32_t)now : 0));
+  if (t.battery_mv > 0) { http.addHeader("X-Battery-mV", String(t.battery_mv)); }
+  if (t.battery_pct >= 0) { http.addHeader("X-Battery-Pct", String(t.battery_pct)); }
+  http.addHeader("X-Charging", t.charging ? "1" : "0");
+  http.addHeader("X-Queue", String((unsigned)queued));
+  http.addHeader("X-Set-Aside", String((unsigned)memo_queue::badCount()));
+  http.addHeader("X-Ignored", String((unsigned)t.ignored));
+  http.addHeader("X-Firmware", FW_VERSION);
+}
+
+// Where to send heartbeats: the upload URL with /upload replaced.
+String heartbeatUrl() {
+  String url = UPLOAD_URL;
+  const int at = url.lastIndexOf("/upload");
+  return (at >= 0 ? url.substring(0, at) : url) + "/heartbeat";
+}
+
+// Negative HTTPClient codes: tell a certificate failure from no internet.
+Outcome transportError(WiFiClientSecure& tls, int status) {
+  char err[80];
+  const int tls_error = tls.lastError(err, sizeof(err));
+  Serial.printf("upload: transport error %d, TLS error %d (%s)\n", status, tls_error, err);
+  return tls_error == TLS_CERT_VERIFY_FAILED ? Outcome::CertError : Outcome::NoInternet;
+}
+
 String memoId(const String& device, const memo_queue::Entry& e) {
   if (e.epoch == 0) { return device + "-" + e.seq; }  // queued before epochs existed
   char epoch[9];
@@ -181,7 +221,7 @@ String deviceId() {
   return String(id);
 }
 
-Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck) {
+Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck, const Telemetry& telemetry) {
   Result r{Outcome::AllSent, 0, 0, 0, 0, String(), 0, 0};
   key_released = false;
   size_t remaining = memo_queue::count();
@@ -211,15 +251,8 @@ Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck) {
 
   const String device = deviceId();
   WiFiClientSecure tls;
-  tls.setCACert(CA_CERTS);
-  // The core's defaults (120 s handshake, 30 s reads) left the stick stuck on
-  // "Sending..." for minutes on a hotspot with no internet.
-  tls.setHandshakeTimeout(TLS_HANDSHAKE_S);
-  tls.setTimeout(TLS_TIMEOUT_S);
   HTTPClient http;
-  http.setReuse(true);  // one TLS handshake for the whole queue
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  configureTls(tls, http);
 
   memo_queue::Entry e;
   while (memo_queue::oldest(e)) {
@@ -249,14 +282,11 @@ Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck) {
       r.outcome = Outcome::Failed;
       break;
     }
-    const time_t now = time(nullptr);
     http.begin(tls, UPLOAD_URL);
-    http.addHeader("Authorization", String("Bearer ") + MEMO_TOKEN);
+    addCommonHeaders(http, device, telemetry, remaining);
     http.addHeader("Content-Type", "audio/wav");
     http.addHeader("X-Memo-Id", memoId(device, e));
     http.addHeader("X-Memo-Time", String(e.time));
-    http.addHeader("X-Memo-Device", device);
-    http.addHeader("X-Device-Now", String(now > CLOCK_VALID_AFTER ? (uint32_t)now : 0));
     const uint32_t t0 = millis();
     if (watchdog) {
       esp_timer_start_once(watchdog, (WATCHDOG_BASE_MS + size / WATCHDOG_MIN_BYTES_PER_MS) * 1000ULL);
@@ -299,10 +329,7 @@ Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck) {
     } else if (status < 0) {
       // HTTPClient's own codes (DNS or connect failure, timeout). A certificate
       // that doesn't verify shows up as one too; tell the two apart.
-      char err[80];
-      const int tls_error = tls.lastError(err, sizeof(err));
-      Serial.printf("upload: transport error %d, TLS error %d (%s)\n", status, tls_error, err);
-      r.outcome = tls_error == TLS_CERT_VERIFY_FAILED ? Outcome::CertError : Outcome::NoInternet;
+      r.outcome = transportError(tls, status);
       break;
     } else {
       r.outcome = Outcome::Failed;  // 5xx, 408, 429: try again later
@@ -317,6 +344,44 @@ Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck) {
   if (waitClockSync(NTP_FINISH_MS)) {
     r.clock_shift = (int32_t)((time(nullptr) - clock_before) - (int32_t)((millis() - millis_before) / 1000));
     if (r.clock_shift > 2 || r.clock_shift < -2) { Serial.printf("clock: corrected by %ld s\n", (long)r.clock_shift); }
+  }
+  return r;
+}
+
+Result heartbeat(gpio_num_t key, const Telemetry& telemetry) {
+  Result r{Outcome::AllSent, 0, 0, 0, 0, String(), 0, 0};
+  key_released = false;
+  if (!connect(key)) {
+    r.outcome = keyDown(key) ? Outcome::Interrupted : Outcome::NoWifi;
+    return r;
+  }
+  r.network = WiFi.SSID();
+  const time_t clock_before = time(nullptr);
+  const uint32_t millis_before = millis();
+  startClockSync();
+  if (clock_before < CLOCK_VALID_AFTER) { waitClockSync(NTP_TIMEOUT_MS); }
+
+  WiFiClientSecure tls;
+  HTTPClient http;
+  configureTls(tls, http);
+  http.begin(tls, heartbeatUrl());
+  addCommonHeaders(http, deviceId(), telemetry, memo_queue::count());
+  const int status = http.sendRequest("POST", (uint8_t*)nullptr, 0);
+  const String reply = status > 0 ? http.getString() : String();
+  http.end();
+  r.http_status = status;
+  Serial.printf("heartbeat -> %d %s\n", status, reply.c_str());
+  if (status >= 200 && status < 300 && reply.indexOf("\"ok\"") >= 0) {
+    r.outcome = Outcome::AllSent;
+  } else if (status == 401) {
+    r.outcome = Outcome::BadToken;
+  } else if (status < 0) {
+    r.outcome = transportError(tls, status);
+  } else {
+    r.outcome = Outcome::Failed;
+  }
+  if (waitClockSync(NTP_FINISH_MS)) {
+    r.clock_shift = (int32_t)((time(nullptr) - clock_before) - (int32_t)((millis() - millis_before) / 1000));
   }
   return r;
 }

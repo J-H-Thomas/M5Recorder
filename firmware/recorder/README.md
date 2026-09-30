@@ -35,6 +35,8 @@ turns it into a transcribed note in Obsidian.
 | **Upload failed** HTTP n | Reached the network but not the receiver (or it errored); kept in the queue. |
 | **Bad token** | The receiver rejected `MEMO_TOKEN`; memos are kept. |
 | **Queue full** | About 2.8 minutes of audio are waiting; new memos can't be saved until they're sent. |
+| **Battery low** x.xx V: charge me | Below 3.45 V (and not charging) it doesn't start Wi-Fi; memos stay queued until it's charged. |
+| **Saved** … QUEUE NEARLY FULL | Under 30 s of audio still fits: get it onto Wi-Fi. |
 | **Storage reset** | The flash filesystem wouldn't mount, so it was reformatted (queued memos lost). This should never happen; it's only done after two failed mounts. |
 
 - **Side button (KEY2): press, release, press** for the status screen (5 s;
@@ -46,6 +48,12 @@ turns it into a transcribed note in Obsidian.
   - Storage free % and how many minutes of audio still fit.
   - How many memos are waiting to send.
   - How many presses were ignored since last time, and any memos set aside.
+  - The firmware version (git describe of the build).
+- **Check-ins:** every upload also reports the battery, charging state, queue,
+  set-aside count, ignored presses and firmware to the receiver, which shows
+  them in Home Assistant. If there's been no upload for 6 hours, the stick
+  wakes briefly (screen off) to send just that report. After a brownout or
+  crash reset it waits 30 minutes before using Wi-Fi.
 
   Pressing the front button while it's showing starts a recording.
 - "BATTERY LOW" appears under **Saved** when the battery is at 20% or less.

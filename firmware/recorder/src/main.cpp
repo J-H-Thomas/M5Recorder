@@ -55,6 +55,12 @@ constexpr int32_t  LOW_BATTERY_PCT = 20;
 constexpr uint32_t BYTES_PER_SECOND = audio::SAMPLE_RATE * sizeof(int16_t);
 constexpr uint8_t  BRIGHTNESS      = 80;
 constexpr time_t   CLOCK_VALID_AFTER = 1700000000;  // Nov 2023
+constexpr time_t   HEARTBEAT_S     = 6 * 3600;  // check in this often when there's nothing to upload
+// Below this (and not charging), don't start Wi-Fi: its current peaks could
+// brown the stick out, and a flat cell would loop resetting.
+constexpr int16_t  LOW_BATTERY_MV  = 3450;
+constexpr uint32_t FAULT_RETRY_MINUTES = 30;    // after a brownout or crash reset, wait before Wi-Fi
+constexpr uint32_t QUEUE_WARN_SECONDS = 30;     // warn when less than this much audio still fits
 
 // Kept through deep sleep.
 RTC_DATA_ATTR bool     key1_wait_release = false;  // slept with KEY1 held: next ext0 wake is its release
@@ -64,6 +70,30 @@ RTC_DATA_ATTR uint32_t retry_minutes = RETRY_MINUTES;  // retry interval after t
 // short wakes (ignored presses, status screen) don't restart the wait.
 RTC_DATA_ATTR time_t   retry_deadline = 0;
 RTC_DATA_ATTR uint16_t ignored_presses = 0;        // rejected gestures since the status screen last showed them
+RTC_DATA_ATTR uint32_t unreported_ignored = 0;     // rejected gestures not yet reported to the receiver
+// When the next check-in is due (0 = set one on the next sleep).
+RTC_DATA_ATTR time_t   heartbeat_deadline = 0;
+
+// The stick's state, read after M5.begin() and before Wi-Fi (the radio's
+// current draw pulls the battery voltage down).
+uploader::Telemetry telemetry_now{0, -1, false, 0};
+
+void readTelemetry() {
+  telemetry_now.battery_mv = M5.Power.getBatteryVoltage();
+  telemetry_now.battery_pct = M5.Power.getBatteryLevel();
+  telemetry_now.charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
+  telemetry_now.ignored = unreported_ignored;
+}
+
+bool batteryTooLowForWifi() {
+  return telemetry_now.battery_mv > 0 && telemetry_now.battery_mv < LOW_BATTERY_MV && !telemetry_now.charging;
+}
+
+// The receiver has the latest state: the next check-in is a full interval away.
+void reported() {
+  heartbeat_deadline = time(nullptr) + HEARTBEAT_S;
+  unreported_ignored = 0;
+}
 
 void show(const char* title, const char* detail = nullptr, uint16_t bg = TFT_BLACK) {
   auto& d = M5.Display;
@@ -131,10 +161,11 @@ void retryIn(uint32_t minutes) { retry_deadline = time(nullptr) + (time_t)minute
   rtc_gpio_pulldown_dis(PIN_KEY2);
   esp_sleep_enable_ext1_wakeup(1ULL << PIN_KEY2, k2_held ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ANY_LOW);
 
-  if (retry_deadline) {
-    const time_t left = retry_deadline - time(nullptr);
-    esp_sleep_enable_timer_wakeup((uint64_t)std::max<time_t>(left, 5) * 1000000ULL);
-  }
+  // Wake for whichever is due first: a retry of queued memos, or a check-in.
+  const time_t now = time(nullptr);
+  if (heartbeat_deadline == 0) { heartbeat_deadline = now + HEARTBEAT_S; }
+  const time_t due = retry_deadline ? std::min(retry_deadline, heartbeat_deadline) : heartbeat_deadline;
+  esp_sleep_enable_timer_wakeup((uint64_t)std::max<time_t>(due - now, 5) * 1000000ULL);
   esp_deep_sleep_start();
 }
 
@@ -207,7 +238,7 @@ void saveRecording(bool mic_ok, bool fs_ok) {
   const size_t n = audio::sampleCount();
   const float seconds = (float)n / audio::SAMPLE_RATE;
   Serial.printf("recorded %.1f s (codec %s)\n", seconds, audio::codecOk() ? "ok" : "FAILED");
-  char detail[48];
+  char detail[96];
 
   if (!mic_ok) {
     show("Mic error", audio::codecOk() ? "I2S or memory" : "codec not responding");
@@ -224,11 +255,13 @@ void saveRecording(bool mic_ok, bool fs_ok) {
     const MemoNumber number = nextMemoNumber();
     if (memo_queue::save(audio::samples(), n, audio::SAMPLE_RATE, number.seq, started, number.epoch)) {
       retry_minutes = RETRY_MINUTES;  // a new memo starts the retry backoff afresh
-      const int32_t battery = M5.Power.getBatteryLevel();
+      const int32_t battery = telemetry_now.battery_pct;
+      int len = snprintf(detail, sizeof(detail), "%.1f s", seconds);
       if (battery >= 0 && battery <= LOW_BATTERY_PCT) {
-        snprintf(detail, sizeof(detail), "%.1f s\n\nBATTERY LOW: %ld%%", seconds, (long)battery);
-      } else {
-        snprintf(detail, sizeof(detail), "%.1f s", seconds);
+        len += snprintf(detail + len, sizeof(detail) - len, "\n\nBATTERY LOW: %ld%%", (long)battery);
+      }
+      if (memo_queue::freeBytes() < QUEUE_WARN_SECONDS * BYTES_PER_SECOND) {
+        snprintf(detail + len, sizeof(detail) - len, "\n\nQUEUE NEARLY FULL");
       }
       show("Saved", detail);
     } else {
@@ -285,6 +318,7 @@ void showStatus(bool fs_ok) {
   d.setTextSize(1);
   d.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   d.printf("\n Ignored presses: %u\n", (unsigned)ignored_presses);
+  d.printf(" Firmware %s\n", FW_VERSION);
   const size_t bad = fs_ok ? memo_queue::badCount() : 0;
   if (bad) {
     d.setTextColor(TFT_ORANGE, TFT_BLACK);
@@ -330,16 +364,52 @@ void showProgress(size_t sent, size_t remaining) {
   deepSleep();
 }
 
+// No Wi-Fi on a nearly flat battery: keep the memos and try again later.
+[[noreturn]] void lowBatterySleep(bool visible) {
+  Serial.printf("battery %d mV: skipping Wi-Fi\n", telemetry_now.battery_mv);
+  if (visible) {
+    char detail[64];
+    snprintf(detail, sizeof(detail), "%.2f V: charge me\n%u memo%s kept", telemetry_now.battery_mv / 1000.0f,
+             (unsigned)memo_queue::count(), memo_queue::count() == 1 ? "" : "s");
+    show("Battery low", detail);
+    delay(MESSAGE_MS);
+  }
+  if (memo_queue::count() && !retry_deadline) { retryIn(retry_minutes); }
+  sleepNow();
+}
+
+// Timer wake with nothing to upload: check in with the receiver if it's due.
+[[noreturn]] void heartbeatAndSleep() {
+  if (time(nullptr) + 60 < heartbeat_deadline) { sleepNow(); }  // woke early (retry timer): nothing due
+  if (batteryTooLowForWifi()) { lowBatterySleep(false); }
+  const auto r = uploader::heartbeat(PIN_KEY1, telemetry_now);
+  if (retry_deadline) { retry_deadline += r.clock_shift; }
+  Serial.printf("heartbeat: outcome %d, http %d\n", (int)r.outcome, r.http_status);
+  if (r.outcome == uploader::Outcome::Interrupted) { sleepNow(true); }
+  // Next check-in a full interval away whether or not this one got through:
+  // a stick that can't reach the receiver shouldn't keep waking to try.
+  if (r.outcome == uploader::Outcome::AllSent) {
+    reported();
+  } else {
+    heartbeat_deadline = time(nullptr) + HEARTBEAT_S;
+  }
+  sleepNow();
+}
+
 [[noreturn]] void uploadAndSleep(bool visible) {
   if (memo_queue::count() == 0) {
     retry_deadline = 0;
+    if (!visible) { heartbeatAndSleep(); }
     sleepNow();
   }
+  if (batteryTooLowForWifi()) { lowBatterySleep(visible); }
 
-  const auto r = uploader::sendQueue(PIN_KEY1, visible ? showProgress : nullptr, uploadStuck);
+  const auto r = uploader::sendQueue(PIN_KEY1, visible ? showProgress : nullptr, uploadStuck, telemetry_now);
   const size_t left = memo_queue::count();
-  // NTP may have moved the clock; keep an existing deadline on the same footing.
+  // NTP may have moved the clock; keep the deadlines on the same footing.
   if (retry_deadline) { retry_deadline += r.clock_shift; }
+  if (heartbeat_deadline) { heartbeat_deadline += r.clock_shift; }
+  if (r.sent || r.set_aside || r.outcome == uploader::Outcome::AllSent) { reported(); }
 
   if (r.outcome == uploader::Outcome::Interrupted) {
     // Not a failure. KEY1 is down: wake straight back into the record gesture.
@@ -434,6 +504,7 @@ void setup() {
     g = detectGesture(PIN_KEY2);
     if (!g.ok) {
       ++ignored_presses;
+      ++unreported_ignored;
       deepSleep();
     }
   }
@@ -442,6 +513,7 @@ void setup() {
     g = detectGesture(PIN_KEY1);
     if (!g.ok) {
       ++ignored_presses;
+      ++unreported_ignored;
       audio::stop();
       audio::release();
       audio::codecOff();
@@ -466,6 +538,7 @@ void setup() {
     M5.In_I2C.bitOff(PM1_ADDR, PM1_PWR_CFG, PM1_LED_EN, PM1_FREQ);
     Serial.printf("led: PWR_CFG was 0x%02X, LED_EN turned off\n", pwr_cfg);
   }
+  readTelemetry();
   if (recording) {
     Serial.printf("gesture: down at start %d, released %lu ms, pressed %lu ms, index %u\n",
                   (int)g.down_at_start, (unsigned long)g.released_ms, (unsigned long)g.pressed_ms,
@@ -492,6 +565,17 @@ void setup() {
   }
 
   if (!fs_ok) { sleepNow(); }
+  // After a brownout or crash (not a normal power-on), don't start Wi-Fi
+  // straight away: on a weak battery that could loop. Try again later.
+  if (cause == ESP_SLEEP_WAKEUP_UNDEFINED) {
+    const auto reason = esp_reset_reason();
+    if (reason == ESP_RST_BROWNOUT || reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT ||
+        reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT) {
+      Serial.printf("reset reason %d: no Wi-Fi this time\n", (int)reason);
+      if (memo_queue::count()) { retryIn(FAULT_RETRY_MINUTES); }
+      sleepNow();
+    }
+  }
   uploadAndSleep(cause != ESP_SLEEP_WAKEUP_TIMER);
 }
 
