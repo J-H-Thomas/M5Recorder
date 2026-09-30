@@ -35,6 +35,11 @@ constexpr gpio_num_t PIN_KEY1   = GPIO_NUM_11;  // front: record
 constexpr gpio_num_t PIN_KEY2   = GPIO_NUM_12;  // side: status screen
 constexpr gpio_num_t PIN_LCD_BL = GPIO_NUM_38;
 
+constexpr uint8_t  PM1_ADDR    = 0x6E;
+constexpr uint32_t PM1_FREQ    = 100000;
+constexpr uint8_t  PM1_PWR_CFG = 0x06;
+constexpr uint8_t  PM1_LED_EN  = 1 << 4;  // green LED
+
 // Record gesture: press, release, press and hold.
 constexpr uint32_t TAP_MAX_MS   = 600;  // first press must be released by then (ms since app start)
 constexpr uint32_t GAP_MAX_MS   = 600;  // second press must start within this of the release
@@ -406,6 +411,14 @@ void setup() {
   M5.begin(cfg);
   M5.Display.setBrightness(cause == ESP_SLEEP_WAKEUP_TIMER ? 0 : BRIGHTNESS);
   M5.Display.setFont(&fonts::Font0);
+  // The green LED is driven by the PM1's LED_EN output, which comes up on and
+  // nothing else turns off. It would draw more than the whole stick asleep.
+  // The PM1 stays powered, so this lasts through deep sleep.
+  const uint8_t pwr_cfg = M5.In_I2C.readRegister8(PM1_ADDR, PM1_PWR_CFG, PM1_FREQ);
+  if (pwr_cfg & PM1_LED_EN) {
+    M5.In_I2C.bitOff(PM1_ADDR, PM1_PWR_CFG, PM1_LED_EN, PM1_FREQ);
+    Serial.printf("led: PWR_CFG was 0x%02X, LED_EN turned off\n", pwr_cfg);
+  }
   if (recording) {
     Serial.printf("gesture: down at start %d, released %lu ms, pressed %lu ms, index %u\n",
                   (int)g.down_at_start, (unsigned long)g.released_ms, (unsigned long)g.pressed_ms,

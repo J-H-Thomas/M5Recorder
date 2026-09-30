@@ -122,6 +122,14 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
     connect failed at 8 s → "No internet", 15 min retry; with data back, the
     queue (including the old pocket memos) sent in one batch.
 
+- **Green LED always on (Jay, 2026-09-30):** it's driven by the PM1's LED_EN
+  output (PWR_CFG 0x06 bit 4; the same LED blinks in download mode). M5Unified
+  only sets it for CoreMatrix/ToughC5 and never touches it for the StickS3, so
+  it stayed at its power-up "on". The firmware clears the bit after
+  `M5.begin()` (the PM1 keeps it through deep sleep). A typical indicator LED
+  draws 1–2 mA against about 0.1 mA for the sleeping stick. Not yet confirmed on
+  the device; if it stays on unplugged, it's something else.
+
 ## Wake-latency experiment (history)
 
 - `firmware/wake_test/` — PlatformIO test firmware that measures how much speech is
