@@ -8,3 +8,9 @@ __pycache__/
 
 # firmware secrets (copy secrets.example.h)
 firmware/*/include/secrets.h
+
+# receiver local runs (never commit memo audio or the database)
+server/data/
+server/vault/
+.env
+*.wav

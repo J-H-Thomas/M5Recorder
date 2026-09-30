@@ -28,11 +28,14 @@ turns it into a transcribed note in Obsidian.
 | **Saved** 12.3 s | Stored in flash, now uploading. |
 | **Sending...** 1 of 3 | Uploading the queue, oldest first. |
 | **Sent** n memos, x KB/s | All memos delivered (with the upload speed); the stick sleeps. |
-| **No Wi-Fi** | Kept in the queue; retried after the next memo, and on a timer (15, 30, 60, then every 120 min while it keeps failing). |
+| **Sent** … n rejected, set aside | The receiver refused some memos for good (e.g. bad format). They're kept in `/bad/` and no longer block the queue; the status screen counts them. |
+| **No Wi-Fi** | Kept in the queue; retried after the next memo, and on a timer (15, 30, 60, then every 120 min while it keeps failing). Short wakes don't restart the timer. |
 | **No internet** via (network) | Joined the network (e.g. the hotspot) but couldn't reach the server; kept, same retries. |
+| **Cert error** | Reached a server whose certificate didn't verify: the CA list in `ca_certs.h` may be out of date. Memos are kept. |
 | **Upload failed** HTTP n | Reached the network but not the receiver (or it errored); kept in the queue. |
 | **Bad token** | The receiver rejected `MEMO_TOKEN`; memos are kept. |
 | **Queue full** | About 2.8 minutes of audio are waiting; new memos can't be saved until they're sent. |
+| **Storage reset** | The flash filesystem wouldn't mount, so it was reformatted (queued memos lost). This should never happen; it's only done after two failed mounts. |
 
 - **Side button (KEY2): press, release, press** for the status screen (5 s;
   press again to close). A single press does nothing, so it can't light the
@@ -42,6 +45,7 @@ turns it into a transcribed note in Obsidian.
     it reads high while charging.
   - Storage free % and how many minutes of audio still fit.
   - How many memos are waiting to send.
+  - How many presses were ignored since last time, and any memos set aside.
 
   Pressing the front button while it's showing starts a recording.
 - "BATTERY LOW" appears under **Saved** when the battery is at 20% or less.
@@ -53,26 +57,34 @@ turns it into a transcribed note in Obsidian.
   is held down (in a pocket), the stick sleeps until it's released rather than
   staying awake.
 - Pressing the front button while it's uploading stops the upload and starts the
-  record gesture (release, then press and hold) for a new
-  recording straight away.
-- Powering on (side button) shows the queue size and the device id, then
-  uploads anything waiting.
+  record gesture (release, then press and hold) for a new recording straight
+  away. (A memo that ran to the 60 s cap with the button still held doesn't
+  count as such a press.)
+- Powering on (the small **power button**) shows the queue size and the device
+  id, then uploads anything waiting.
 
 ## How it works
 
-- `audio.cpp`: the fast-wake path from `firmware/wake_test` (see the notes in
-  `CLAUDE.md`). It keeps the codec rail (L3B) on through sleep, and on a KEY1
-  wake sets up the ES8311 and I2S before `M5.begin()`. A capture task records
-  into PSRAM and stops itself when KEY1 is released.
-- `memo_queue.cpp`: WAV files in LittleFS, `/q/<seq>_<unix time>.wav`, written
-  as `.part` and renamed, so a crash never leaves half a memo in the queue.
-  The sequence number is kept in NVS.
-- `uploader.cpp`: joins networks by name, last-good first. A network that isn't
-  there is reported by the Wi-Fi driver after its own scan (a couple of seconds),
-  so it moves on without waiting out the 8 s timeout. Wi-Fi power-save is off. It syncs the clock over NTP if
-  it isn't set (the clock keeps running through deep sleep), then POSTs each
-  memo over HTTPS (read into PSRAM and sent in one write) with the Let's Encrypt
-  roots in `ca_certs.h`. It deletes a
-  memo only after a 2xx. The memo id is `<MAC>-<seq>`, so a re-send after a
-  lost reply isn't duplicated.
+- `audio.cpp`: the fast-wake path from `firmware/wake_test` (see `CLAUDE.md`).
+  It keeps the codec rail (L3B) on through sleep, and on a KEY1 wake sets up
+  the ES8311 and I2S before `M5.begin()`. A capture task records into PSRAM from
+  the first press. After the gesture is confirmed (`arm()`), it stops when KEY1
+  is released or at 60 s.
+- `memo_queue.cpp`: WAV files in LittleFS at `/q/<seq>_<unix time>_<epoch>.wav`.
+  - Written as `.part` and renamed, so a crash never leaves half a memo in the
+    queue; leftovers are cleaned at mount.
+  - The sequence number and a random epoch are kept in NVS.
+  - Rejected memos move to `/bad/`.
+  - LittleFS is only formatted if it won't mount twice.
+- `uploader.cpp`:
+  - Joins networks by name, last-good first. A missing network is reported by
+    the driver in a couple of seconds.
+  - Wi-Fi power-save is off, and NTP syncs every round (the sleep clock drifts).
+  - POSTs each memo over HTTPS, read into PSRAM and sent in one write, checked
+    against the Let's Encrypt roots in `ca_certs.h`. Each request carries
+    `X-Device-Now` so the server can correct the time.
+  - The memo id is `<MAC>-<epoch>-<seq>`. A memo is deleted only when the
+    receiver's reply says `queued` or `duplicate`; any other 200 (a misrouted
+    proxy, say) keeps it.
+  - Short TLS/HTTP timeouts, plus a per-request watchdog that forces sleep.
 - Partitions (`partitions.csv`): 2.5 MB app, about 5.4 MB LittleFS queue.

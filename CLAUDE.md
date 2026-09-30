@@ -1,250 +1,205 @@
-# M5Recorder — project handoff notes
+# M5Recorder: project notes
 
-Push-to-talk voice memo recorder on an **M5StickS3**. Hold the button → record →
-release → upload → transcribe on the home server (Whisper) → Obsidian notes.
-The user (Jay) works locally with the device on USB (COM port changes between
-normal and download mode; find it by USB VID 303A).
+Pocket voice-memo recorder on an **M5StickS3**, built for Jay. To record:
+**press, release, then press and hold** the front button; let go to stop. The
+memo is queued in flash, uploaded over Wi-Fi (Jay's phone hotspot, or home
+Wi-Fi), transcribed on the home server, and lands as a note in the Obsidian
+vault, which syncs to Jay's phone within seconds.
 
 ```
-stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hotspot)
-  ─► HTTPS POST https://memos.<domain>/upload (Bearer token)
+stick ─► WAV queue in LittleFS ─► Wi-Fi (last network that worked first,
+  then hotspot, then home) ─► HTTPS POST https://memos.asdf.ac/upload (Bearer token)
   ─► Pangolin (Newt tunnel, no router ports) ─► MS-01 (Unraid) receiver container
   ─► faster-whisper ─► <vault>/Memos/<date time>.md with the audio embedded
 ```
 
+Plans are in `ROADMAP.md` (data safety, then alerts and battery, then
+compression and security, then OTA). The repo is **public**: no secrets,
+Wi-Fi names, LAN addresses or personal data in files or commit messages.
+
 ## Layout
 
-- `firmware/recorder/`: the real firmware (fast-wake recording, flash queue,
-  Wi-Fi + HTTPS upload, 15 min retry timer). `include/secrets.h` is gitignored
-  (copy `secrets.example.h`). See its README.
-- `server/`: receiver (FastAPI + faster-whisper, Docker). `pytest` in `server/`
-  (venv in `server/.venv`). See its README for Unraid and Pangolin setup.
-- `firmware/wake_test/`: the wake-latency experiment the recorder is based on.
+- `firmware/recorder/`: the stick's firmware (PlatformIO). `include/secrets.h`
+  (Wi-Fi networks, upload URL, token) is gitignored; **never print or commit
+  it**. Copy `secrets.example.h`. See its README for controls and screens.
+- `server/`: the receiver (FastAPI + faster-whisper, Docker). Tests:
+  `server/.venv/Scripts/python -m pytest` from `server/`. See its README.
+- `firmware/wake_test/`: the wake-latency experiment the recorder's fast start
+  came from (archived).
+
+## Working on it
+
+- **Branches:** multi-part work goes on a branch (e.g. `phase1-data-safety`)
+  and is merged to `main` once the stick and the server are both tested. `main`
+  should match what is deployed. Commit and push as you go.
+- **Flashing:** `pio run -t upload --upload-port COMx` in `firmware/recorder`.
+  The stick is usually asleep (no USB port), so Jay puts it in download mode:
+  hold the **power button** (the small PMIC button, not KEY2) about 2 s until the
+  green LED blinks. Find the port by USB VID 303A (it moves between COM8/COM9).
+  After flashing, a single click of the power button restarts it.
+- **Logs:** the stick prints to USB serial while awake. A reconnecting logger
+  (a pyserial script that reopens the VID 303A port whenever it appears) catches
+  wakes. Stop it before flashing, or it holds the port. Lines printed before
+  USB enumerates (rejected presses, early setup) are lost.
+- **Server changes are deployed by a Claude session on the Unraid box.** Give
+  Jay a self-contained prompt for it. Source is in
+  `/mnt/user/appdata/m5recorder/src`; rebuild with
+  `docker build -t m5recorder-receiver /mnt/user/appdata/m5recorder/src/server`,
+  then recreate the container through Compose Manager project `m5recorder`.
+- **Shell gotcha:** in this environment, `\n` inside Bash heredocs and inline
+  scripts gets turned into real newlines (and `\v` into a control character).
+  Write files containing escapes with the Write/Edit tools, or build the
+  backslash with `chr(92)` in Python.
+
+## Deployment (MS-01, Unraid)
+
+- Container `m5recorder-receiver`, host port 8090, user 99:100, large-v3-turbo on
+  CPU int8 (no GPU). Data and models are in `/mnt/user/appdata/m5recorder/{data,models}`;
+  `MEMO_TOKEN` is in the Compose Manager project's `.env` (root only).
+- Vault `/mnt/user/Obsidian/Memex`: notes in `Memos/`, audio in `Memos/audio/`.
+  It syncs to Jay's phone.
+- Pangolin resource "m5-memos" → the MS-01's LAN address, port 8090, on site
+  "Unraid". Public name `memos.asdf.ac`. Pangolin login is on, with bypass rules
+  for `/upload` and `/health` only; the receiver's bearer token protects those.
+- **TLS:** Let's Encrypt "Gen Y" chain: leaf ← YR1 ← ISRG Root YR (sent
+  cross-signed by ISRG Root X1). The stick's mbedTLS (ESP-IDF 4.4) has **no
+  TLS 1.3**; the server also offers TLS 1.2 with ECDHE-RSA-AES-GCM. `ca_certs.h`
+  holds ISRG X1, X2, YR and YE. The server key is RSA 4096, so the handshake
+  (about 1.5–2 s per wake) dominates each upload.
+- **Never run `docker image prune -a`** on Unraid: it deletes the tagged rollback
+  image.
 
 ## Known-good versions (to roll back to)
 
-- **`v0.1.0-mvp`** (git tag, 2026-09-30): the first version that works end to end
-  in daily use, before the post-review roadmap.
-  - Stick: the exact flashed image (built with the real secrets, so private) is
-    in `C:/AI Working/M5Recorder-backups/v0.1.0-mvp/`, outside any repo, with
-    `RESTORE.md` (esptool command) and SHA256SUMS. Or check out the tag, restore
-    `secrets.h` and `pio run -t upload`.
-  - Server (done by the Unraid session, 2026-09-30): image
-    `m5recorder-receiver:v0.1.0-mvp` = the running image `fdf9b50c50e1` (a
-    rebuild from the tag may differ: transitive Python dependencies aren't
-    pinned yet). **Never run `docker image prune -a`**: it deletes unused
-    images, tags included. DB snapshot (VACUUM INTO, integrity checked, 24
-    memos): `/mnt/user/appdata/m5recorder/data/memos-v0.1.0-mvp.db`.
-  - Server rollback:
-    1. In `/boot/config/plugins/compose.manager/projects/m5recorder/docker-compose.yml`,
-       set `image: m5recorder-receiver:v0.1.0-mvp`, then recreate the container.
+- **`v0.1.0-mvp`** (git tag, 2026-09-30): the first version in daily use,
+  before the post-review roadmap.
+  - **Stick:** the exact flashed image (built with the real secrets, so
+    private) is in `C:/AI Working/M5Recorder-backups/v0.1.0-mvp/` (outside any
+    repo), with `RESTORE.md` (esptool command) and SHA256SUMS. Or check out the
+    tag, restore `secrets.h` and `pio run -t upload`.
+  - **Server:** image `m5recorder-receiver:v0.1.0-mvp` (= `fdf9b50c50e1`). A
+    rebuild from the tag may differ, because transitive Python dependencies
+    aren't pinned yet. DB snapshot:
+    `/mnt/user/appdata/m5recorder/data/memos-v0.1.0-mvp.db` (24 memos).
+  - **Server rollback:**
+    1. Set `image: m5recorder-receiver:v0.1.0-mvp` in
+       `/boot/config/plugins/compose.manager/projects/m5recorder/docker-compose.yml`
+       and recreate the container.
     2. To restore the DB too: stop the container, copy the snapshot over
-       `memos.db`, **delete `memos.db-wal` and `memos.db-shm`** (or SQLite
-       replays the newer log onto it), then start the container.
+       `memos.db`, **delete `memos.db-wal` and `memos.db-shm`**, then start it.
+    3. Phase 1 changed the memo id format (`<MAC>-<epoch>-<seq>`). The old
+       server accepts it (the id regex allows it), but roll the stick and the
+       server back together.
 
-    Memo ids received after the snapshot are forgotten, which is harmless
-    because the stick's ids only go up. Note that Phase 1.1 changes the id
-    format.
+## How it works now (and why)
 
-## Status
+**Stick** (`firmware/recorder/src`):
+- **Fast start:** the codec rail (L3B) stays on in sleep. On a KEY1 wake, the
+  ES8311 and I2S are set up and a capture task starts before `M5.begin()`: audio
+  is live about 55 ms after the app starts. With L3B off in sleep, the ES8311
+  sent zeros for about 1 s, and `M5.begin()` alone takes about 400 ms.
+- **Gesture** (`detectGesture()`): the first press is released within 600 ms of
+  app start, the second press comes within 600 ms, with a 30 ms debounce. Jay's
+  presses measure 120–143 ms and 100–150 ms. It's checked before `M5.begin()`,
+  so a rejected press never lights the screen; rejections count as "Ignored
+  presses" on the status screen. The memo keeps 0.25 s of pre-roll before the
+  second press, which usually saves "one". The cap is 60 s. KEY2 needs press,
+  release, press for the status screen.
+- **Held buttons:** `deepSleep()` arms ext0/ext1 to wake on the *release* of a
+  held button (RTC flags `key1/2_wait_release`); that wake sleeps again at once.
+- **Memo ids:** `<MAC>-<epoch>-<seq>`. The epoch is random, kept in NVS with the
+  seq, and regenerated if NVS is wiped, so ids never repeat and the server can't
+  mistake a new memo for a duplicate. Queue files are
+  `/q/<seq>_<time>_<epoch>.wav`; older 2-field names are still sent with old ids.
+- **Upload:**
+  - Join by name, the last-good network first. A scan-first version saw "0
+    networks": the core ends an async scan after 20 × the per-channel time.
+    A network that times out gets one 12 s retry.
+  - Wi-Fi sleep is off, and each memo is sent from PSRAM in one write.
+  - Timeouts: 10 s TLS handshake, 15 s reads, 8 s connect. The core defaults
+    (120 s handshake) left it stuck on "Sending..." on a hotspot with no data.
+  - A per-request esp_timer watchdog forces sleep if a request still blocks.
+  - A memo is deleted only on a 2xx whose body says `queued` or `duplicate`.
+  - A receiver 4xx carrying `"detail"` (bad format, 409) moves the memo to
+    `/bad/` ("Set aside" on the status screen).
+  - Transport errors show "No internet", or "Cert error" when mbedTLS reports
+    X509 verification failed.
+- **Retries:** the backoff is 15/30/60/120 min from an **absolute deadline** in
+  RTC memory (`retry_deadline`, on the `time()` clock), so short wakes don't
+  restart it. It resets on success, and a new memo always tries at once.
+- **Clock:** the sleep clock is the internal RC oscillator
+  (`CONFIG_ESP32S3_RTC_CLK_SRC_INT_RC`), which drifts. NTP runs on every upload
+  round, and each request carries `X-Device-Now` so the server can correct the
+  memo time.
+- **Storage:** LittleFS is formatted only if it won't mount twice (the screen
+  then says "Storage reset"). `.part` leftovers are cleaned at mount. A memo
+  that can't be read is kept, not deleted. The queue holds about 2.8 min of
+  audio (Phase 3 adds compression).
+- **Green LED:** PM1 `PWR_CFG` (0x06) bit 4 `LED_EN` comes up on, and M5Unified
+  never clears it for the StickS3. The firmware clears it after `M5.begin()`;
+  the PM1 keeps it through deep sleep. It probably drew more than the rest of
+  the sleeping stick.
 
-- **Receiver (2026-09-30):** 10 tests pass. Run locally end to end with the
-  `base` model: a TTS test memo was transcribed word for word; the retry-on-restart
-  and duplicate-id paths were checked live.
-- **Deployed on the MS-01 (2026-09-30, by a Claude session on the server):**
-  - Container `m5recorder-receiver` (Compose Manager project `m5recorder`), host
-    port 8090, user 99:100, large-v3-turbo on CPU int8 (no GPU).
-  - Source is in /mnt/user/appdata/m5recorder/src (rebuild with
-    `docker build -t m5recorder-receiver .../src/server`, then recreate the
-    container through the compose project). Data and models are in
-    /mnt/user/appdata/m5recorder/{data,models}. The token is in the project's
-    `.env` (root only).
-  - Vault /mnt/user/Obsidian/Memex (new; notes in Memos/, audio in Memos/audio/).
-    **Not synced to any device yet** (Jay's decision).
-  - Pangolin resource "m5-memos" → http://10.10.1.201:8090. Public name
-    **https://memos.asdf.ac**. Login is on, with bypass rules for `/upload` and
-    `/health` only. From outside: health ok, no token → 401, and a test upload
-    was queued. The ids deploy-test-1 and deploy-test-2 are used.
-  - **TLS:** Let's Encrypt "Gen Y" chain: leaf ← YR1 ← ISRG Root YR (sent
-    cross-signed by ISRG Root X1). It verifies with X1 alone, and with Root YR
-    alone. The server accepts TLS 1.2 with ECDHE-RSA-AES-GCM, which ESP-IDF 4.4's
-    mbedTLS needs (it has no TLS 1.3). `ca_certs.h` holds X1, X2, YR and YE.
-- **Recorder firmware: flashed and working end to end (2026-09-30)**, with
-  `secrets.h` filled in by Jay (gitignored):
-  - Memo 1 over the **phone hotspot** (Jay was away from home): note written with
-    a correct transcript. Transcribed about 5 s after upload for 4.8 s of audio.
-  - **Offline queue:** memos 2–4 recorded without Wi-Fi, then sent as one batch
-    over one keep-alive connection when the hotspot came back. The notes carry
-    the recording time (the clock was set by NTP earlier and survives deep
-    sleep). All transcripts correct.
-  - Transcription is about 0.7× the audio length on the MS-01 CPU; the VAD trims
-    about 1 s of silence per clip.
-  - **Not yet tested: home Wi-Fi.**
-- **Known slowness (next work):** each upload takes about 7 s for 160–200 KB
-  (about 25–30 KB/s). The likely cause is Wi-Fi modem sleep (on by default) plus
-  small writes. Away from home, the stick also spends about 8 s trying the home
-  SSID before the hotspot. Planned fix: scan first and join a known network in
-  range, turn Wi-Fi sleep off during uploads, write in bigger chunks, and log
-  the upload rate.
-- **KEY2 status screen (2026-09-30, Jay's request):** KEY2 (G12) wakes the
-  stick via ext1 (alongside ext0 on KEY1) and shows battery % (M5Unified's
-  voltage-based estimate via the M5PM1, plus volts and charging state),
-  storage free % and minutes left, and the queue count. "BATTERY LOW" (≤20%)
-  appears after saving.
-- **Wi-Fi joining and faster uploads (2026-09-30):** a scan-first version saw
-  "0 networks" in the field. The cause: the Arduino core ends an async scan after
-  20x max_ms_per_chan (2.4 s at 120 ms) and `scanComplete()` then reports
-  WIFI_SCAN_FAILED. Replaced with join-by-name, trying the last network that
-  worked first (RTC memory), then `WIFI_NETWORKS` order (phone hotspot
-  first, home Wi-Fi second, at Jay's request, since it's mostly used away
-  from home). It moves on early on WL_NO_SSID_AVAIL / WL_CONNECT_FAILED. Wi-Fi
-  sleep is off, and each memo is read into PSRAM and sent in one write (a File
-  stream went out in 1460-byte TLS records). The Sent screen and serial log
-  show KB/s. Jay's hotspot is now 2.4 GHz only (it was mixed 2.4/5).
-  - One field failure: a memo about 7 s after the previous one timed out joining
-    the hotspot (not refused, not "not found"). Since then, a network that
-    timed out gets one 12 s retry after a Wi-Fi reset, and the driver's
-    disconnect reasons are logged.
-  - **Field test after that (2026-09-30): 4 memos, 13–18 s apart, all joined
-    the hotspot in about 1 s at the first attempt** (no retry needed), and
-    uploaded in 3.3–4.4 s each (97–194 KB). Most of that is the TLS handshake:
-    one per wake, and the server has a 4096-bit RSA key. Within one connection,
-    later memos reach about 60 KB/s. A memo reaches the server about 5 s after
-    release (it was about 15 s). Reusing the TLS session across sleeps could cut
-    this further; not done. Reason 8 (ASSOC_LEAVE) in the log is the stick's
-    own disconnect before sleep.
-  - The KEY2 status screen works on the device (Jay, 2026-09-30).
-- Other ideas: hide the Docker health-check lines in the receiver's access log.
-  Jay still has to set up sync for the Memex vault.
+**Receiver** (`server/app`):
+- The token is checked first (constant-time).
+- Upload checks: the id and device headers must be `[A-Za-z0-9_-]`; the audio
+  must be 16 kHz mono 16-bit, with its length taken from the bytes actually
+  received.
+- It stores size and sha256: a known id with the same audio is a `duplicate`
+  (200); with different audio, a **409**.
+- It writes a placeholder note ("transcribing…") at once, and the worker
+  replaces it.
+- The worker catches everything and retries failures (1, 4, 16, 64 min). After
+  5 attempts it writes "transcription failed" with the audio embedded.
+- `/health` reports worker liveness and failed/gave-up counts, and returns 503
+  if the worker is down.
+- Time: `memo_time()` returns device, corrected (the stick's clock was more than
+  60 s off, going by `X-Device-Now`), or received (the clock wasn't set). It's
+  shown as `time_source:` in the note.
+- The DB schema migrates itself (new columns added on startup).
+- faster-whisper 1.1.1 needs `requests` and `huggingface-hub<1`. PyAV 19 broke
+  its decoder, so `load_audio()` reads WAVs directly.
 
-- **Field fixes (2026-09-30, after an evening in Jay's pocket):**
-  - **Record gesture is now press, release, press and hold** (Jay's choice).
-    Capture starts at the first press; `detectGesture()` in main.cpp checks it
-    before `M5.begin()` (first press released within 600 ms of app start,
-    second within 600 ms of that, 30 ms debounce). A rejected press sleeps
-    without lighting the screen and counts toward "Ignored presses" on the
-    status screen. The memo keeps 0.25 s of pre-roll before the second press.
-    Max 60 s. Limit: a very fast double press whose second press is already
-    down at app start is rejected. Tune from the `gesture:` serial log.
-  - **The side button is guarded the same way** (Jay, 2026-09-30): press,
-    release, press opens the status screen (no hold needed). A rejected KEY2
-    press sleeps at once and counts as ignored. Before, a pocket press lit the
-    screen for 5 s (about 0.08 mAh, roughly 8x a rejected KEY1 press).
-    Tested on the device by Jay (2026-09-30): works.
-  - **Held buttons**: `deepSleep()` arms ext0/ext1 to wake on *release* for a
-    button that's held (an RTC flag says so), and that wake sleeps again at once.
-    Before this, `sleepNow()` spun awake until release.
-  - **Hotspot with no internet → stuck on "Sending..."**: the core defaults
-    are a 120 s TLS handshake and 30 s reads. Now 10 s / 15 s, 8 s connect, 15 s
-    HTTP, plus an esp_timer watchdog per request (20 s + size/20 KB/s) that calls
-    `uploadStuck()` → deep sleep. HTTPClient codes < 0 show "No internet".
-    Retry backoff 15/30/60/120 min in RTC memory, reset on success or on a new
-    memo.
-  - **Tested on the device (2026-09-30):** single taps, press-and-hold and a 30 s
-    hold didn't record; the gesture recorded every time. Jay's timings: first
-    release 120–143 ms after app start, second press 100–150 ms after that
-    (the 600 ms windows have plenty of margin). Hotspot with no data: the
-    connect failed at 8 s → "No internet", 15 min retry; with data back, the
-    queue (including the old pocket memos) sent in one batch.
+## Decisions (Jay, 2026-09-30)
 
-- **Green LED always on (Jay, 2026-09-30):** it's driven by the PM1's LED_EN
-  output (PWR_CFG 0x06 bit 4; the same LED blinks in download mode). M5Unified
-  only sets it for CoreMatrix/ToughC5 and never touches it for the StickS3, so
-  it stayed at its power-up "on". The firmware clears the bit after
-  `M5.begin()` (the PM1 keeps it through deep sleep). A typical indicator LED
-  draws 1–2 mA against about 0.1 mA for the sleeping stick. **Confirmed by Jay
-  (2026-09-30): the LED goes off and stays off unplugged, and everything else
-  still works.** It was probably the biggest battery drain until now; the
-  roadmap's battery telemetry will show the real figure.
+- **Wi-Fi, not BLE**: the S3 has BLE only, and BLE would need a custom Android
+  app kept alive on Samsung.
+- **Reach home through Pangolin**, not the phone's Tailscale: non-rooted
+  Android doesn't route hotspot clients through the VPN.
+- **Transcribe on the MS-01**, not the phone.
+- **One note per memo in Obsidian**, with the audio embedded.
+- The hotspot is 2.4 GHz only (the ESP32 can't do 5 GHz) and listed first in
+  `secrets.h`; Jay mostly records away from home.
+- **Press, release, press and hold** to record (not a side-button lock). The
+  side button uses the same gesture.
+- Max memo 60 s. Battery: 2+ days per charge was the bar; it will be measured
+  in Phase 2.
 
-## Wake-latency experiment (history)
+## Hardware facts
 
-- `firmware/wake_test/` — PlatformIO test firmware that measures how much speech is
-  lost between pressing KEY1 and the mic delivering real audio after deep sleep.
-  See its README for how to run it and which numbers to collect.
-- **First version, run on hardware 2026-09-30** (4 s holds, counting aloud):
-  - L3B off in sleep: setup 51, M5.begin 459, Mic.begin 516 ms; then the ES8311 sent
-    exact zeros for **994 ms**. Playback started at "five" ("one"–"four" lost).
-  - L3B on in sleep: same timings, audio live at 0 ms after mic start. Only "one" lost.
-  - So the mic works, keeping L3B on removes the codec warm-up, and the remaining
-    loss is start-up time, mostly `M5.begin()` (~408 ms).
-- **Current version (branch `fast-wake`)**: L3B on in sleep by default; on a KEY1
-  wake it writes the ES8311 registers and starts I2S + a capture task *before*
-  `M5.begin()`, so the display comes up while it's already recording. Adds a
-  `gap` figure (longest zero run after audio starts) to catch codec resets or
-  overruns. **Run on hardware 2026-09-30:** setup 52, mic **55** ms (was 516),
-  M5.begin 463 ms (now after the mic), audio +0, speech +0, gap 0. "One" is caught
-  most times. speech +0 means the user was already talking at the first sample,
-  so the remaining misses come from ROM + bootloader + Arduino start-up before
-  `setup()`, which the app can't see.
-- "One" is now clipped only sometimes (Jay, 2026-09-30); good enough for now.
-- Parked: the sleep-current cost of keeping L3B on (Jay: 2+ days of battery is
-  fine; optimise once it works). Cutting boot time before `setup()` (bootloader
-  image check on wake, PSRAM memtest, log level) needs a custom sdkconfig, e.g.
-  pioarduino or Arduino as an ESP-IDF component.
+From the sticker, docs.m5stack.com/en/core/StickS3, the M5PM1 datasheet v1.9
+and schematic V0.6.
 
-## Decisions so far
-
-- **Transport (2026-09-30): Wi-Fi to home or the phone hotspot, not BLE.** The
-  ESP32-S3 has BLE only (no Classic BT). BLE would need a custom Android app kept
-  alive in the background on Samsung, and it's slow.
-- **Reaching home: Jay's existing Pangolin tunnel.** Not the phone's Tailscale:
-  on non-rooted Android, hotspot clients' traffic doesn't go through the VPN
-  (tailscale issues #14980, #15114). Pangolin login is bypassed for `/upload`
-  and `/health`; the receiver checks a bearer token (at least 24 characters).
-- **Transcription on the MS-01, not the phone** (faster-whisper; CPU int8 by
-  default; it's unknown whether the MS-01 has a GPU). The phone is only the network.
-- **Notes go into Jay's Obsidian vault**, one per memo, with the audio embedded
-  (vault path on Unraid still to be given).
-- Battery: 2+ days per charge is acceptable for now.
-
-- **Wake approach: ESP32 deep sleep, ext0 wake on KEY1 (G11, front button).**
-  KEY1 cannot power the device on from full power-off — only the separate PMIC
-  power button can (see the schematic power-mode notes). Full-off standby saves only about
-  2 mAh/day, so it isn't worth using the small side power button to record.
-- Record to flash/PSRAM first, upload afterwards over Wi-Fi to a small server on
-  the user's computer; queue memos when Wi-Fi is unavailable. No live streaming.
-- Ignore presses under about 0.5 s. Keep the LCD backlight off while recording
-  (deferred: the red REC screen stays on for now to help testing).
-
-## Hardware facts (from the sticker, docs.m5stack.com/en/core/StickS3, M5PM1 datasheet v1.9, schematic V0.6)
-
-- SoC: ESP32-S3-PICO-1-N8R8 — 8 MB quad flash, 8 MB **octal** PSRAM (`qio_opi`).
-  Native USB (G19/G20).
-- Battery 250 mAh. Measured by M5Stack at 4.2 V: power-off 14 µA, L1 52 µA,
+- SoC: ESP32-S3-PICO-1-N8R8: 8 MB quad flash, 8 MB **octal** PSRAM
+  (`qio_opi`). Native USB (G19/G20).
+- Battery 250 mAh. M5Stack measured, at 4.2 V: power-off 14 µA, L1 52 µA,
   **L2 (ESP32 sleeping) 102 µA**, L3A (running) 36.7 mA.
-- Buttons: **KEY1 = G11** (front), **KEY2 = G12** (side), both active-low, both
-  RTC-capable. A separate **PMIC power button**: single click = power on / reset,
-  double = off, long press (2 s default) = download mode (green LED blinks).
-- PMIC **M5PM1** at I2C 0x6E on the internal bus SDA=G47 / SCL=G48 (100 kHz).
-  PM1 GPIO2 = L3B rail enable (LCD + ES8311 LDO); GPIO3 = speaker amp enable;
-  GPIO0 = charge status; GPIO4 = IMU interrupt. Key registers: 0x05 WAKE_SRC,
-  0x06 PWR_CFG, 0x09 I2C idle sleep (keep 0), 0x0C SYS_CMD (0xA1 off, 0xA2 restart,
-  0xA3 download), 0x11 GPIO_OUT, 0x38–0x3C wake/power-on timer, 0x48 BTN_Status,
-  0x49 BTN_CFG (bit7 DL_LOCK, bit0 SINGLE_RESET_DIS), 0x4A double-click-off disable,
-  0xA0–0xBF 32 B RAM that survives ESP32 power-off.
-- Audio: ES8311 codec (I2C 0x18) + MEMS mic (65 dB SNR). I2S MCLK G18, BCLK G17,
-  LRCK G15, DIN (mic→ESP) G16, DOUT G14. AW8737 speaker amp. Speaker and mic share
-  the codec/I2S, so call `Speaker.end()` before `Mic.begin()` and the other way round.
-  Keep speaker volume under ~75% on battery (brown-out resets).
-- **Known risk:** M5Unified says the ES8311 may output all-zero samples for about 1 s
-  after power-up. The wake test measures this (`audio +` value). One possible fix
-  is to keep L3B powered in sleep (KEY2 toggle in the test).
+- **KEY1 = G11** (front), **KEY2 = G12** (side): both active-low and
+  RTC-capable. The separate **PMIC power button**: single click = power on or
+  reset, double = off, long press (2 s) = download mode (green LED blinks).
+- **M5PM1** at I2C 0x6E on SDA G47 / SCL G48 (100 kHz).
+  - PM1 GPIO2 = L3B rail (LCD + ES8311); GPIO3 = speaker amp; GPIO0 = charge
+    status.
+  - Registers: 0x05 WAKE_SRC, 0x06 PWR_CFG (bit 4 LED_EN), 0x09 I2C idle sleep
+    (keep 0), 0x0C SYS_CMD, 0x11 GPIO_OUT, 0x48/0x49 button status/config, and
+    0xA0–0xBF 32 B RAM that survives ESP32 power-off.
+- **ES8311** codec at 0x18 and a MEMS mic. I2S MCLK G18, BCLK G17, LRCK G15,
+  DIN G16, DOUT G14. The mic register sequence is copied from M5Unified's
+  `_microphone_enabled_cb_sticks3`. Speaker and mic share the codec.
 - LCD ST7789P3 135×240: MOSI G39, SCK G40, DC G45, CS G41, RST G21, BL G38.
-- IMU BMI270 (0x68). IR TX G46 / RX G42. Grove Port A G9/G10.
-
-## Software notes
-
-- PlatformIO, `espressif32@6.9.0` (Arduino core 2.0.x), board `esp32-s3-devkitc-1`
-  with 8 MB / `qio_opi` overrides; M5Unified 0.2.24 + M5GFX 0.2.31 both support
-  StickS3 (autodetected through the PM1). USB CDC on boot is enabled.
-- M5GFX's StickS3 autodetect turns on L3B and has ~200 ms of fixed delays, so if
-  `M5.begin()` is slow on wake, one fix is to bypass it on the wake path.
-- M5Unified's `deepSleep()` doesn't set up a wake pin for StickS3; the test uses
-  `esp_sleep_enable_ext0_wakeup(G11, 0)` plus an RTC pull-up directly.
-
-## Battery estimate (30 memos/day, 10–20 s)
-
-About 0.3 mAh per memo (≈45 mA recording + a Wi-Fi upload) ≈ 9 mAh/day, plus
-~2.5 mAh/day sleep → **about 2½ weeks per charge** (≈200 mAh usable). Recording
-and upload dominate; failed Wi-Fi retries are the main thing to avoid.
+- Toolchain: `espressif32@6.9.0` (Arduino core 2.0.x on IDF 4.4), board
+  `esp32-s3-devkitc-1` with 8 MB / `qio_opi`; M5Unified 0.2.24, M5GFX 0.2.31.
+  The core's sdkconfig has app rollback enabled
+  (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`), but `initArduino()` marks images
+  valid unless `verifyRollbackLater()` is overridden. Deep-sleep wakes already
+  skip image validation.

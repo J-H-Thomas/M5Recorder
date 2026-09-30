@@ -12,19 +12,32 @@ stick ── HTTPS ──► Pangolin ──► Newt tunnel ──► this conta
 
 ## API
 
-- `POST /upload`: body is a WAV file. Headers:
-  - `Authorization: Bearer <MEMO_TOKEN>`
-  - `X-Memo-Id`: unique per memo (`<device MAC>-<sequence>`). Re-sending the
-    same id returns `{"status": "duplicate"}`, so the stick can safely retry.
-  - `X-Memo-Time`: Unix time at recording. `0` (clock not set) means the
-    receive time is used.
-  - `X-Memo-Device` (optional): defaults to the part of the id before the last `-`.
+- `POST /upload`: body is a WAV file, **16 kHz mono 16-bit** (anything else
+  gets 400). Headers:
+  - `Authorization: Bearer <MEMO_TOKEN>` (checked first; 401 otherwise).
+  - `X-Memo-Id`: unique per memo, `[A-Za-z0-9_-]{1,64}`. The stick sends
+    `<MAC>-<epoch>-<seq>`, where the random epoch makes ids unique even if its
+    counter restarts.
+    - Re-sending the same id with the **same** audio returns
+      `{"status": "duplicate"}`, so the stick can retry safely.
+    - The same id with **different** audio returns **409**, so a memo is never
+      mistaken for one already stored.
+  - `X-Memo-Time`: Unix time at recording (`0`: the stick's clock wasn't set).
+  - `X-Device-Now`: the stick's clock at upload. If it's more than 60 s off, the
+    memo time is corrected by the difference.
+  - `X-Memo-Device` (optional): defaults to the id's first part.
 
-  Returns `{"status": "queued"}` as soon as the audio is saved. Transcription
-  runs in the background, one memo at a time.
-- `GET /health`: `{"ok": true, "unfinished": <memos not yet transcribed>}`.
+  Returns `{"status": "queued"}` as soon as the audio is saved, and writes a
+  placeholder note ("transcribing…") straight away. Transcription runs in the
+  background, one memo at a time, and replaces the placeholder. Errors are JSON
+  with a `detail` field.
+- `GET /health`:
+  `{"ok", "worker", "unfinished", "failed", "gave_up"}`. It returns **503** if
+  the transcription worker isn't running.
 
-Transcriptions that fail are retried the next time the container starts.
+A failed transcription is retried after 1, 4, 16 and 64 minutes (and on
+restart). After 5 attempts the note says "transcription failed" and keeps the
+audio, so the memo is never lost from view.
 
 ## Note format
 
@@ -32,14 +45,22 @@ Transcriptions that fail are retried the next time the container starts.
 ---
 created: 2026-09-30T14:12:05+01:00
 duration: 12.4
-device: 14c19fd4eb98
-memo_id: 14c19fd4eb98-17
+device: aabbccddeeff
+memo_id: aabbccddeeff-1a2b3c4d-17
+time_source: device
+status: done
 tags: [memo]
 ---
 ![[Memos/audio/2026-09-30 141205.wav]]
 
 Remember to book the car in for its MOT next week.
 ```
+
+- `status`: `transcribing`, then `done`, or `failed` after 5 attempts.
+- `time_source`:
+  - `device`: the stick's clock;
+  - `corrected`: the stick's clock was off, and the server shifted it;
+  - `received`: the stick's clock wasn't set, so the upload time was used.
 
 ## Settings (environment variables)
 

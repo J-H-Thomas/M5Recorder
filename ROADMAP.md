@@ -26,6 +26,11 @@ After carrying the stick for an evening:
 
 ## Phase 1: data safety (small, do first)
 
+**Built on branch `phase1-data-safety` (2026-09-30).** The receiver has 20 tests
+and was checked end to end locally, and the firmware builds. **Still to do:**
+deploy the receiver, flash the stick, test on the device, deliberately trigger
+the upload watchdog, then merge to `main`.
+
 1. **Unique memo ids** (all three reviews). The id `<MAC>-<seq>` restarts
    if NVS is wiped (full flash erase, or the Arduino core erasing NVS on
    NO_FREE_PAGES / NEW_VERSION_FOUND). The server then answers "duplicate" and
