@@ -9,7 +9,8 @@ enum class Outcome {
   AllSent,     // queue is empty
   NoWifi,      // none of the networks connected
   NoInternet,  // joined Wi-Fi but couldn't reach the server (DNS, connect, timeout)
-  Failed,      // reached the server, but it returned an error
+  CertError,   // reached a server whose certificate didn't verify (CA list out of date?)
+  Failed,      // reached the server, but it returned an error (or a memo couldn't be read)
   BadToken,    // the receiver rejected the token: fix secrets.h
   Interrupted, // KEY1 was pressed
 };
@@ -21,6 +22,8 @@ struct Result {
   size_t   bytes;        // sent successfully
   uint32_t upload_ms;    // time spent on those requests (incl. the server's reply)
   String   network;      // the Wi-Fi network joined, if any
+  size_t   set_aside;    // memos the receiver rejected, moved out of the queue
+  int32_t  clock_shift;  // seconds NTP moved the clock this round (0 if not synced)
 };
 
 // Progress callback: (sent so far, remaining in queue).

@@ -60,7 +60,9 @@ constexpr time_t   CLOCK_VALID_AFTER = 1700000000;  // Nov 2023
 RTC_DATA_ATTR bool     key1_wait_release = false;  // slept with KEY1 held: next ext0 wake is its release
 RTC_DATA_ATTR bool     key2_wait_release = false;
 RTC_DATA_ATTR uint32_t retry_minutes = RETRY_MINUTES;  // retry interval after the next failed round
-RTC_DATA_ATTR uint32_t armed_minutes = 0;          // retry timer it last slept with (0 = none)
+// When the retry timer is due, on the time() clock (0 = no retry). Absolute, so
+// short wakes (ignored presses, status screen) don't restart the wait.
+RTC_DATA_ATTR time_t   retry_deadline = 0;
 RTC_DATA_ATTR uint16_t ignored_presses = 0;        // rejected gestures since the status screen last showed them
 
 void show(const char* title, const char* detail = nullptr, uint16_t bg = TFT_BLACK) {
@@ -77,14 +79,31 @@ void show(const char* title, const char* detail = nullptr, uint16_t bg = TFT_BLA
   }
 }
 
-uint32_t nextSeq() {
+struct MemoNumber {
+  uint32_t seq;
+  uint32_t epoch;
+};
+
+// Memo ids are <MAC>-<epoch>-<seq>. The epoch is random and kept in NVS with
+// the sequence number; if NVS is ever wiped (full flash erase, or the Arduino
+// core resetting it) both start afresh, and the new epoch keeps the new ids
+// from matching ones the receiver already has (it would call them duplicates
+// and the stick would delete the memos).
+MemoNumber nextMemoNumber() {
   Preferences prefs;
   prefs.begin("recorder", false);
+  uint32_t epoch = prefs.getUInt("epoch", 0);
+  if (epoch == 0) {
+    epoch = esp_random() | 1;  // never 0 (0 means "queued before epochs")
+    prefs.putUInt("epoch", epoch);
+  }
   const uint32_t seq = prefs.getUInt("seq", 0) + 1;
   prefs.putUInt("seq", seq);
   prefs.end();
-  return seq;
+  return {seq, epoch};
 }
+
+void retryIn(uint32_t minutes) { retry_deadline = time(nullptr) + (time_t)minutes * 60; }
 
 // Configures the wake sources and sleeps. Needs nothing initialised, so it's
 // also used before M5.begin() and from the upload watchdog's timer task.
@@ -93,8 +112,8 @@ uint32_t nextSeq() {
 // armed to wake on its *release* instead (and that wake just sleeps again).
 // key1_is_press: KEY1 is down because the user is starting the record gesture
 // (pressed on the status screen or during an upload): wake at once on it.
-// timer_minutes: retry-timer wake (0 = none).
-[[noreturn]] void deepSleep(uint32_t timer_minutes, bool key1_is_press = false) {
+// The retry timer, if any, is armed for whatever is left until retry_deadline.
+[[noreturn]] void deepSleep(bool key1_is_press = false) {
   pinMode(PIN_LCD_BL, OUTPUT);  // keep the backlight off while the pads are unpowered
   digitalWrite(PIN_LCD_BL, LOW);
   gpio_hold_en(PIN_LCD_BL);
@@ -112,19 +131,21 @@ uint32_t nextSeq() {
   rtc_gpio_pulldown_dis(PIN_KEY2);
   esp_sleep_enable_ext1_wakeup(1ULL << PIN_KEY2, k2_held ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ANY_LOW);
 
-  armed_minutes = timer_minutes;
-  if (timer_minutes) { esp_sleep_enable_timer_wakeup(timer_minutes * 60ULL * 1000000ULL); }
+  if (retry_deadline) {
+    const time_t left = retry_deadline - time(nullptr);
+    esp_sleep_enable_timer_wakeup((uint64_t)std::max<time_t>(left, 5) * 1000000ULL);
+  }
   esp_deep_sleep_start();
 }
 
 // Normal sleep after M5.begin(): Wi-Fi, codec and display off first.
-[[noreturn]] void sleepNow(uint32_t timer_minutes, bool key1_is_press = false) {
+[[noreturn]] void sleepNow(bool key1_is_press = false) {
   uploader::shutdown();
   audio::codecOff();
   M5.Display.sleep();
   M5.Display.waitDisplay();
   Serial.flush();
-  deepSleep(timer_minutes, key1_is_press);
+  deepSleep(key1_is_press);
 }
 
 struct Gesture {
@@ -200,7 +221,8 @@ void saveRecording(bool mic_ok, bool fs_ok) {
     const time_t now = time(nullptr);
     const uint32_t started = now > CLOCK_VALID_AFTER ? (uint32_t)(now - (time_t)seconds) : 0;
     show("Saving...");
-    if (memo_queue::save(audio::samples(), n, audio::SAMPLE_RATE, nextSeq(), started)) {
+    const MemoNumber number = nextMemoNumber();
+    if (memo_queue::save(audio::samples(), n, audio::SAMPLE_RATE, number.seq, started, number.epoch)) {
       retry_minutes = RETRY_MINUTES;  // a new memo starts the retry backoff afresh
       const int32_t battery = M5.Power.getBatteryLevel();
       if (battery >= 0 && battery <= LOW_BATTERY_PCT) {
@@ -263,6 +285,11 @@ void showStatus(bool fs_ok) {
   d.setTextSize(1);
   d.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   d.printf("\n Ignored presses: %u\n", (unsigned)ignored_presses);
+  const size_t bad = fs_ok ? memo_queue::badCount() : 0;
+  if (bad) {
+    d.setTextColor(TFT_ORANGE, TFT_BLACK);
+    d.printf(" Set aside: %u (rejected)\n", (unsigned)bad);
+  }
   Serial.printf("status: battery %ld%% %d mV charging %d, ignored presses %u\n", (long)level, mv,
                 (int)charging, (unsigned)ignored_presses);
   ignored_presses = 0;
@@ -273,17 +300,16 @@ void showStatus(bool fs_ok) {
 [[noreturn]] void statusAndSleep(bool fs_ok) {
   M5.Display.setBrightness(BRIGHTNESS);
   showStatus(fs_ok);
-  const uint32_t retry = fs_ok && memo_queue::count() > 0 ? retry_minutes : 0;
   bool key2_armed = false;  // ignore the gesture's second press until it's released
   const uint32_t start = millis();
   while (millis() - start < STATUS_MS) {
-    if (digitalRead(PIN_KEY1) == LOW) { sleepNow(retry, true); }
+    if (digitalRead(PIN_KEY1) == LOW) { sleepNow(true); }
     const bool key2_down = digitalRead(PIN_KEY2) == LOW;
     if (!key2_down) { key2_armed = true; }
     if (key2_armed && key2_down) { break; }
     delay(20);
   }
-  sleepNow(retry);
+  sleepNow();
 }
 
 void showProgress(size_t sent, size_t remaining) {
@@ -293,42 +319,63 @@ void showProgress(size_t sent, size_t remaining) {
 }
 
 // Upload watchdog (runs in the esp_timer task): a request blocked past its
-// budget. Count it as a failure and sleep; the queue is retried later.
+// budget. Count it as a failure and sleep; the queue is retried later. The
+// main task is stuck in the network stack, so the codec (I2C) and display
+// (SPI) are free to power down from here. Deep sleep powers the radio down.
 [[noreturn]] void uploadStuck() {
-  const uint32_t retry_in = retry_minutes;
+  retryIn(retry_minutes);
   retry_minutes = std::min(retry_minutes * 2, RETRY_MAX_MINUTES);
-  esp_wifi_stop();
-  deepSleep(retry_in);
+  audio::codecOff();
+  M5.Display.sleep();
+  deepSleep();
 }
 
 [[noreturn]] void uploadAndSleep(bool visible) {
-  if (memo_queue::count() == 0) { sleepNow(0); }
+  if (memo_queue::count() == 0) {
+    retry_deadline = 0;
+    sleepNow();
+  }
 
   const auto r = uploader::sendQueue(PIN_KEY1, visible ? showProgress : nullptr, uploadStuck);
   const size_t left = memo_queue::count();
+  // NTP may have moved the clock; keep an existing deadline on the same footing.
+  if (retry_deadline) { retry_deadline += r.clock_shift; }
 
   if (r.outcome == uploader::Outcome::Interrupted) {
     // Not a failure. KEY1 is down: wake straight back into the record gesture.
-    sleepNow(left ? retry_minutes : 0, true);
+    if (left && !retry_deadline) { retryIn(retry_minutes); }
+    sleepNow(true);
   }
   // On failure, retry after retry_in minutes, and back off for the round after.
   const uint32_t retry_in = retry_minutes;
   if (left == 0) {
     retry_minutes = RETRY_MINUTES;
+    retry_deadline = 0;
   } else {
     retry_minutes = std::min(retry_minutes * 2, RETRY_MAX_MINUTES);
+    retryIn(retry_in);
   }
-  Serial.printf("upload: outcome %d, sent %u, left %u, http %d, retry in %lu min\n",
-                (int)r.outcome, (unsigned)r.sent, (unsigned)left, r.http_status,
+  Serial.printf("upload: outcome %d, sent %u, set aside %u, left %u, http %d, retry in %lu min\n",
+                (int)r.outcome, (unsigned)r.sent, (unsigned)r.set_aside, (unsigned)left, r.http_status,
                 (unsigned long)(left ? retry_in : 0));
 
   if (visible) {
-    char detail[64];
+    char detail[80];
     switch (r.outcome) {
       case uploader::Outcome::AllSent:
-        snprintf(detail, sizeof(detail), "%u memo%s, %.0f KB/s", (unsigned)r.sent, r.sent == 1 ? "" : "s",
-                 r.upload_ms ? r.bytes / 1.024f / r.upload_ms : 0.0f);
+        if (r.set_aside) {
+          snprintf(detail, sizeof(detail), "%u memo%s\n%u rejected, set aside", (unsigned)r.sent,
+                   r.sent == 1 ? "" : "s", (unsigned)r.set_aside);
+        } else {
+          snprintf(detail, sizeof(detail), "%u memo%s, %.0f KB/s", (unsigned)r.sent, r.sent == 1 ? "" : "s",
+                   r.upload_ms ? r.bytes / 1.024f / r.upload_ms : 0.0f);
+        }
         show("Sent", detail);
+        break;
+      case uploader::Outcome::CertError:
+        snprintf(detail, sizeof(detail), "server certificate not trusted\n%u queued\nretry in %lu min",
+                 (unsigned)left, (unsigned long)retry_in);
+        show("Cert error", detail);
         break;
       case uploader::Outcome::NoWifi:
         snprintf(detail, sizeof(detail), "%u queued\nretry in %lu min", (unsigned)left, (unsigned long)retry_in);
@@ -350,7 +397,7 @@ void showProgress(size_t sent, size_t remaining) {
     }
     delay(MESSAGE_MS);
   }
-  sleepNow(left ? retry_in : 0);
+  sleepNow();
 }
 
 }  // namespace
@@ -369,11 +416,11 @@ void setup() {
   // A button that was held when we slept has been released: nothing to do.
   if (cause == ESP_SLEEP_WAKEUP_EXT0 && key1_wait_release) {
     key1_wait_release = false;
-    deepSleep(armed_minutes);
+    deepSleep();
   }
   if (cause == ESP_SLEEP_WAKEUP_EXT1 && key2_wait_release) {
     key2_wait_release = false;
-    deepSleep(armed_minutes);
+    deepSleep();
   }
 
   // KEY1: start the mic at once, then check for press, release, press and
@@ -387,7 +434,7 @@ void setup() {
     g = detectGesture(PIN_KEY2);
     if (!g.ok) {
       ++ignored_presses;
-      deepSleep(armed_minutes);
+      deepSleep();
     }
   }
   if (recording) {
@@ -398,7 +445,7 @@ void setup() {
       audio::stop();
       audio::release();
       audio::codecOff();
-      deepSleep(armed_minutes);
+      deepSleep();
     }
     audio::arm(g.press2_index > PRE_ROLL ? g.press2_index - PRE_ROLL : 0);
   }
@@ -425,7 +472,12 @@ void setup() {
                   (unsigned)g.press2_index);
   }
 
-  const bool fs_ok = memo_queue::begin();
+  const auto mount = memo_queue::begin();
+  const bool fs_ok = mount != memo_queue::MountResult::Failed;
+  if (mount == memo_queue::MountResult::Reformatted && cause != ESP_SLEEP_WAKEUP_TIMER) {
+    show("Storage reset", "it wouldn't mount, so it\nwas reformatted: any\nqueued memos are lost");
+    delay(MESSAGE_MS * 2);
+  }
 
   if (cause == ESP_SLEEP_WAKEUP_EXT1) { statusAndSleep(fs_ok); }
   if (recording) {
@@ -439,7 +491,7 @@ void setup() {
     delay(MESSAGE_MS);
   }
 
-  if (!fs_ok) { sleepNow(0); }
+  if (!fs_ok) { sleepNow(); }
   uploadAndSleep(cause != ESP_SLEEP_WAKEUP_TIMER);
 }
 
