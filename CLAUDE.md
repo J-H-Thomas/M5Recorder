@@ -110,6 +110,12 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
     `uploadStuck()` → deep sleep. HTTPClient codes < 0 show "No internet".
     Retry backoff 15/30/60/120 min in RTC memory, reset on success or on a new
     memo.
+  - **Tested on the device (2026-09-30):** single taps, press-and-hold and a 30 s
+    hold didn't record; the gesture recorded every time. Jay's timings: first
+    release 120–143 ms after app start, second press 100–150 ms after that
+    (the 600 ms windows have plenty of margin). Hotspot with no data: the
+    connect failed at 8 s → "No internet", 15 min retry; with data back, the
+    queue (including the old pocket memos) sent in one batch.
 
 ## Wake-latency experiment (history)
 
