@@ -14,5 +14,5 @@ hold button, talk ─► stick saves the memo ─► Wi-Fi (home or phone hotspo
 - [`firmware/wake_test/`](firmware/wake_test/README.md): the experiment that
   worked out how to start recording fast enough after deep sleep.
 
-[`ROADMAP.md`](ROADMAP.md): the planned tidy-up (updates over Wi-Fi, prebuilt server
-image, battery tracking, repo housekeeping).
+[`ROADMAP.md`](ROADMAP.md): planned work (data safety, alerts and battery tracking,
+compression and security, then updates over Wi-Fi).
