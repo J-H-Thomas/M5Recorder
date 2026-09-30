@@ -1,6 +1,8 @@
 # Recorder firmware (M5StickS3)
 
-Push-to-talk memos: **hold the front button (KEY1), talk, let go.** The memo
+Voice memos: **press the front button (KEY1), release, then press and hold it
+while you talk; let go to stop.** A single press, or a single press held down
+(e.g. in a pocket), does nothing. The memo
 is saved to flash, then uploaded over Wi-Fi to the receiver (`server/`), which
 turns it into a transcribed note in Obsidian.
 
@@ -22,11 +24,12 @@ turns it into a transcribed note in Obsidian.
 
 | Screen | Meaning |
 |---|---|
-| red **REC** | Recording; let go to stop. Up to 2 minutes. |
+| red **REC** | Recording; let go to stop. Up to 60 seconds (it stops itself). |
 | **Saved** 12.3 s | Stored in flash, now uploading. |
 | **Sending...** 1 of 3 | Uploading the queue, oldest first. |
 | **Sent** n memos, x KB/s | All memos delivered (with the upload speed); the stick sleeps. |
-| **No Wi-Fi** | Kept in the queue; it retries every 15 minutes and after the next memo. |
+| **No Wi-Fi** | Kept in the queue; retried after the next memo, and on a timer (15, 30, 60, then every 120 min while it keeps failing). |
+| **No internet** via (network) | Joined the network (e.g. the hotspot) but couldn't reach the server; kept, same retries. |
 | **Upload failed** HTTP n | Reached the network but not the receiver (or it errored); kept in the queue. |
 | **Bad token** | The receiver rejected `MEMO_TOKEN`; memos are kept. |
 | **Queue full** | About 2.8 minutes of audio are waiting; new memos can't be saved until they're sent. |
@@ -40,8 +43,15 @@ turns it into a transcribed note in Obsidian.
 
   Pressing the front button while it's showing starts a recording.
 - "BATTERY LOW" appears under **Saved** when the battery is at 20% or less.
-- Taps shorter than 0.5 s are ignored.
-- Pressing the button while it's uploading stops the upload and starts a new
+- The recording keeps about 0.25 s from before the second press (the mic starts
+  on the first press), so the first word isn't clipped. Memos under 0.5 s are
+  ignored.
+- Presses that aren't the record gesture send the stick straight back to sleep
+  with the screen off; the status screen shows how many were ignored. If a button
+  is held down (in a pocket), the stick sleeps until it's released rather than
+  staying awake.
+- Pressing the front button while it's uploading stops the upload and starts the
+  record gesture (release, then press and hold) for a new
   recording straight away.
 - Powering on (side button) shows the queue size and the device id, then
   uploads anything waiting.

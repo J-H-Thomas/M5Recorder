@@ -39,9 +39,13 @@ constexpr uint8_t MIC_OFF[][2] = {
 constexpr size_t  READ_FRAMES   = 256;  // stereo frames per i2s_read (16 ms)
 constexpr int32_t GAIN          = 8;    // matches M5Unified's default (magnification 16, over_sampling 2)
 constexpr int     RELEASE_READS = 2;    // KEY1 up for 2 reads in a row (~32 ms) ends the memo
+// Room for the gesture (press, release, press) before the memo starts.
+constexpr size_t  BUFFER_SAMPLES = MAX_SAMPLES + SAMPLE_RATE * 3;
 
 int16_t*          buf = nullptr;
 volatile size_t   count = 0;
+volatile size_t   start_at = 0;
+volatile bool     armed = false;
 volatile bool     stop_req = false;
 volatile bool     done = true;
 bool              running = false;
@@ -83,14 +87,17 @@ bool startI2s() {
 }
 
 // Reads stereo frames and keeps the louder slot of each (the mic is on one of
-// them; the other is zero or a copy). Stops itself when KEY1 is released.
+// them; the other is zero or a copy). Once armed, stops itself when KEY1 is
+// released or the memo reaches MAX_SECONDS.
 void captureTask(void*) {
   static int16_t raw[READ_FRAMES * 2];
   int released = 0;
-  while (!stop_req && count < MAX_SAMPLES) {
+  while (!stop_req && count < BUFFER_SAMPLES) {
     size_t got = 0;
     i2s_read(I2S_PORT, raw, sizeof(raw), &got, pdMS_TO_TICKS(100));
-    const size_t frames = std::min(got / (2 * sizeof(int16_t)), MAX_SAMPLES - count);
+    size_t limit = BUFFER_SAMPLES;
+    if (armed) { limit = std::min(limit, start_at + MAX_SAMPLES); }
+    const size_t frames = std::min(got / (2 * sizeof(int16_t)), limit - count);
     size_t n = count;
     for (size_t f = 0; f < frames; ++f) {
       const int16_t a = raw[f * 2], b = raw[f * 2 + 1];
@@ -98,6 +105,8 @@ void captureTask(void*) {
       buf[n++] = (int16_t)std::max<int32_t>(-32768, std::min<int32_t>(32767, s));
     }
     count = n;
+    if (!armed) { continue; }
+    if (count >= limit) { break; }
     released = digitalRead(key) == HIGH ? released + 1 : 0;
     if (released >= RELEASE_READS) { break; }
   }
@@ -110,9 +119,11 @@ void captureTask(void*) {
 bool start(gpio_num_t key_pin) {
   key = key_pin;
   count = 0;
+  start_at = 0;
+  armed = false;
   stop_req = false;
   done = true;
-  buf = (int16_t*)heap_caps_malloc(MAX_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+  buf = (int16_t*)heap_caps_malloc(BUFFER_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
 
   M5.In_I2C.begin(I2C_NUM_1, GPIO_NUM_47, GPIO_NUM_48);
   // L3B normally stays on through sleep; this is a no-op then.
@@ -132,6 +143,13 @@ bool start(gpio_num_t key_pin) {
   return true;
 }
 
+size_t currentIndex() { return count; }
+
+void arm(size_t start_index) {
+  start_at = std::min(start_index, (size_t)count);
+  armed = true;
+}
+
 bool finished() { return done; }
 
 void stop() {
@@ -143,17 +161,21 @@ void stop() {
   }
 }
 
-const int16_t* samples() { return buf; }
-size_t sampleCount() { return count; }
+const int16_t* samples() { return buf ? buf + start_at : nullptr; }
+size_t sampleCount() { return armed && count > start_at ? count - start_at : 0; }
 bool codecOk() { return codec_ok; }
 
 void release() {
   free(buf);
   buf = nullptr;
   count = 0;
+  start_at = 0;
+  armed = false;
 }
 
 void codecOff() {
+  // Works whether or not M5.begin() has run (a rejected press skips it).
+  M5.In_I2C.begin(I2C_NUM_1, GPIO_NUM_47, GPIO_NUM_48);
   writeRegs(MIC_OFF, sizeof(MIC_OFF) / sizeof(MIC_OFF[0]));
 }
 

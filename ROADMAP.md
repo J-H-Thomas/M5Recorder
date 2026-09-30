@@ -20,6 +20,17 @@ Order: quick, low-risk server and repo work first. Then battery telemetry, which
 starts collecting data early. Then OTA last, since it needs one final USB flash
 and a partition change.
 
+## Phase 0: field fixes (done 2026-09-30)
+
+After carrying the stick for an evening:
+- **Pocket presses**: recording now needs press, release, press and hold; other
+  presses sleep again at once without lighting the screen. Memos max 60 s. A held
+  button no longer keeps the stick awake (it sleeps until the release).
+- **Hotspot with no internet stuck on "Sending..."**: TLS/HTTP timeouts cut
+  from the core's 120 s handshake / 30 s reads to 10–15 s, plus a per-request
+  watchdog that forces sleep. It shows **No internet**, and retries back off
+  15 → 30 → 60 → 120 min.
+
 ## Phase 1: server and repo housekeeping (no stick changes)
 
 1. **Quieter logs**: `server/app/main.py`, in `build()`: add a `logging.Filter`

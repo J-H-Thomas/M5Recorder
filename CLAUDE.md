@@ -92,6 +92,25 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
 - Other ideas: hide the Docker health-check lines in the receiver's access log.
   Jay still has to set up sync for the Memex vault.
 
+- **Field fixes (2026-09-30, after an evening in Jay's pocket):**
+  - **Record gesture is now press, release, press and hold** (Jay's choice).
+    Capture starts at the first press; `detectGesture()` in main.cpp checks it
+    before `M5.begin()` (first press released within 600 ms of app start,
+    second within 600 ms of that, 30 ms debounce). A rejected press sleeps
+    without lighting the screen and counts toward "Ignored presses" on the
+    status screen. The memo keeps 0.25 s of pre-roll before the second press.
+    Max 60 s. Limit: a very fast double press whose second press is already
+    down at app start is rejected. Tune from the `gesture:` serial log.
+  - **Held buttons**: `deepSleep()` arms ext0/ext1 to wake on *release* for a
+    button that's held (an RTC flag says so), and that wake sleeps again at once.
+    Before this, `sleepNow()` spun awake until release.
+  - **Hotspot with no internet → stuck on "Sending..."**: the core defaults
+    are a 120 s TLS handshake and 30 s reads. Now 10 s / 15 s, 8 s connect, 15 s
+    HTTP, plus an esp_timer watchdog per request (20 s + size/20 KB/s) that calls
+    `uploadStuck()` → deep sleep. HTTPClient codes < 0 show "No internet".
+    Retry backoff 15/30/60/120 min in RTC memory, reset on success or on a new
+    memo.
+
 ## Wake-latency experiment (history)
 
 - `firmware/wake_test/` — PlatformIO test firmware that measures how much speech is

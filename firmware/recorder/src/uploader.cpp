@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_sntp.h>
+#include <esp_timer.h>
 
 #include "ca_certs.h"
 #include "memo_queue.h"
@@ -17,7 +18,14 @@ constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;   // first attempt at each network
 constexpr uint32_t RETRY_TIMEOUT_MS   = 12000;  // second attempt at one that timed out
 constexpr uint32_t STALE_STATUS_MS    = 1000;   // ignore "not found" this soon after begin()
 constexpr uint32_t NTP_TIMEOUT_MS     = 3000;
-constexpr uint32_t HTTP_TIMEOUT_MS    = 20000;
+constexpr uint32_t TLS_HANDSHAKE_S    = 10;
+constexpr uint32_t TLS_TIMEOUT_S      = 15;
+constexpr int32_t  HTTP_CONNECT_TIMEOUT_MS = 8000;
+constexpr uint16_t HTTP_TIMEOUT_MS    = 15000;
+// Per-request watchdog: 20 s plus 20 KB/s for the body (a 2-minute memo, about
+// 3.8 MB, still gets over 3 minutes).
+constexpr uint32_t WATCHDOG_BASE_MS   = 20000;
+constexpr uint32_t WATCHDOG_MIN_BYTES_PER_MS = 20;
 constexpr time_t   CLOCK_VALID_AFTER  = 1700000000;  // Nov 2023
 constexpr int      NETWORK_COUNT      = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
 
@@ -141,21 +149,40 @@ String deviceId() {
   return String(id);
 }
 
-Result sendQueue(gpio_num_t key, Progress progress) {
-  Result r{Outcome::AllSent, 0, 0, 0, 0};
+Result sendQueue(gpio_num_t key, Progress progress, Stuck on_stuck) {
+  Result r{Outcome::AllSent, 0, 0, 0, 0, String()};
   size_t remaining = memo_queue::count();
   if (remaining == 0) { return r; }
   if (!connect(key)) {
     r.outcome = keyDown(key) ? Outcome::Interrupted : Outcome::NoWifi;
     return r;
   }
+  r.network = WiFi.SSID();
   if (time(nullptr) < CLOCK_VALID_AFTER) { syncClock(); }
+
+  // Backstop for a request that blocks past every timeout below.
+  esp_timer_handle_t watchdog = nullptr;
+  if (on_stuck) {
+    esp_timer_create_args_t args{};
+    args.callback = [](void* fn) {
+      Serial.println("upload: watchdog fired, forcing sleep");
+      ((Stuck)fn)();
+    };
+    args.arg = (void*)on_stuck;
+    args.name = "upload-wd";
+    esp_timer_create(&args, &watchdog);
+  }
 
   const String device = deviceId();
   WiFiClientSecure tls;
   tls.setCACert(CA_CERTS);
+  // The core's defaults (120 s handshake, 30 s reads) left the stick stuck on
+  // "Sending..." for minutes on a hotspot with no internet.
+  tls.setHandshakeTimeout(TLS_HANDSHAKE_S);
+  tls.setTimeout(TLS_TIMEOUT_S);
   HTTPClient http;
   http.setReuse(true);  // one TLS handshake for the whole queue
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   http.setTimeout(HTTP_TIMEOUT_MS);
 
   memo_queue::Entry e;
@@ -186,7 +213,11 @@ Result sendQueue(gpio_num_t key, Progress progress) {
     http.addHeader("X-Memo-Time", String(e.time));
     http.addHeader("X-Memo-Device", device);
     const uint32_t t0 = millis();
+    if (watchdog) {
+      esp_timer_start_once(watchdog, (WATCHDOG_BASE_MS + size / WATCHDOG_MIN_BYTES_PER_MS) * 1000ULL);
+    }
     const int status = http.sendRequest("POST", body, size);
+    if (watchdog) { esp_timer_stop(watchdog); }
     const uint32_t ms = millis() - t0;
     http.end();
     free(body);
@@ -201,10 +232,15 @@ Result sendQueue(gpio_num_t key, Progress progress) {
       r.bytes += size;
       r.upload_ms += ms;
     } else {
-      r.outcome = status == 401 ? Outcome::BadToken : Outcome::Failed;
+      // Negative codes are HTTPClient's own (DNS or connect failure, timeout):
+      // the network is up but the server can't be reached.
+      r.outcome = status == 401 ? Outcome::BadToken
+                : status < 0    ? Outcome::NoInternet
+                                : Outcome::Failed;
       break;
     }
   }
+  if (watchdog) { esp_timer_delete(watchdog); }
   if (r.outcome == Outcome::AllSent && memo_queue::count() > 0) { r.outcome = Outcome::Failed; }
   return r;
 }
