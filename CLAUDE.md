@@ -6,13 +6,22 @@ The user is now working locally with the device on USB.
 
 ## Status
 
-- `firmware/wake_test/` — PlatformIO test firmware. **Builds cleanly, not yet run on
-  hardware.** Its job is to measure how much speech is lost between pressing KEY1
-  and the mic delivering real audio after deep sleep. See its README for how to
-  run it and which numbers to collect.
-- Next step: flash it (`cd firmware/wake_test && pio run -t upload`, then
-  `pio device monitor`), run several tests with "L3B in sleep" off and on, and
-  check whether "one" in "one two three" is clipped on playback.
+- `firmware/wake_test/` — PlatformIO test firmware that measures how much speech is
+  lost between pressing KEY1 and the mic delivering real audio after deep sleep.
+  See its README for how to run it and which numbers to collect.
+- **First version, run on hardware 2026-09-30** (4 s holds, counting aloud):
+  - L3B off in sleep: setup 51, M5.begin 459, Mic.begin 516 ms; then the ES8311 sent
+    exact zeros for **994 ms**. Playback started at "five" ("one"–"four" lost).
+  - L3B on in sleep: same timings, audio live at 0 ms after mic start. Only "one" lost.
+  - So the mic works, keeping L3B on removes the codec warm-up, and the remaining
+    loss is start-up time, mostly `M5.begin()` (~408 ms).
+- **Current version (branch `fast-wake`)**: L3B on in sleep by default; on a KEY1
+  wake it writes the ES8311 registers and starts I2S + a capture task *before*
+  `M5.begin()`, so the display comes up while it's already recording. Adds a
+  `gap` figure (longest zero run after audio starts) to catch codec resets or
+  overruns. Builds cleanly; **not yet run on hardware**.
+- Next: run the fast version (a few 4 s holds), check "one" survives, then measure
+  the sleep-current cost of keeping L3B on.
 - After that: build the real recorder firmware (step 1) and the computer-side
   receiver + Whisper (step 2). A phone link is deferred.
 

@@ -23,11 +23,14 @@ power button about 2 s until the green LED blinks, then upload.
 4. The recording plays back: listen for whether "one" is clipped.
 5. The results screen shows:
    - `KEY1 held`: whether the button was still down when the app started
-   - `setup` / `begin` / `mic`: ms from app start to each stage
+   - `setup` / `mic` / `begin`: ms from app start to each stage (the mic now
+     starts before `M5.begin()`)
+   - `codec`: whether the ES8311 register writes succeeded
    - `audio +`: ms after mic start before the codec sent non-zero samples
    - `speech+`: ms after mic start before speech-level audio
+   - `gap`: longest run of silence (exact zeros) after audio started; should be 0
    - `rec`: recorded length
-6. KEY2 (side) toggles "L3B in sleep": keeps the codec and LCD supply on
+6. KEY2 (side) toggles "L3B in sleep" (on by default): keeps the codec and LCD supply on
    during sleep, to see if that shortens codec warm-up. Run a few tests each way.
 7. KEY1 sleeps again for the next test (or it sleeps by itself after 30 s).
 
