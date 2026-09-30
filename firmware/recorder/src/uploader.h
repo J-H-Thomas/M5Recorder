@@ -15,8 +15,10 @@ enum class Outcome {
 
 struct Result {
   Outcome outcome;
-  size_t  sent;
-  int     http_status;  // last HTTP status (or negative HTTPClient error)
+  size_t   sent;
+  int      http_status;  // last HTTP status (or negative HTTPClient error)
+  size_t   bytes;        // sent successfully
+  uint32_t upload_ms;    // time spent on those requests (incl. the server's reply)
 };
 
 // Progress callback: (sent so far, remaining in queue).

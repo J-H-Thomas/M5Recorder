@@ -7,7 +7,9 @@ turns it into a transcribed note in Obsidian.
 ## Set up
 
 1. Copy `include/secrets.example.h` to `include/secrets.h` (gitignored) and fill in:
-   - `WIFI_NETWORKS`: home Wi-Fi first, then the phone hotspot. The ESP32 only
+   - `WIFI_NETWORKS`: home Wi-Fi first, then the phone hotspot (the stick scans and
+     joins the first one in range, so order is preference; hidden networks
+     aren't supported). The ESP32 only
      does **2.4 GHz**. On the Samsung hotspot, set the band to 2.4 GHz (or a
      setting that includes it), security to WPA2, and "Turn off hotspot
      automatically" to **Never**, otherwise it switches off between memos.
@@ -24,7 +26,7 @@ turns it into a transcribed note in Obsidian.
 | red **REC** | Recording; let go to stop. Up to 2 minutes. |
 | **Saved** 12.3 s | Stored in flash, now uploading. |
 | **Sending...** 1 of 3 | Uploading the queue, oldest first. |
-| **Sent** | All memos delivered; the stick sleeps. |
+| **Sent** n memos, x KB/s | All memos delivered (with the upload speed); the stick sleeps. |
 | **No Wi-Fi** | Kept in the queue; it retries every 15 minutes and after the next memo. |
 | **Upload failed** HTTP n | Reached the network but not the receiver (or it errored); kept in the queue. |
 | **Bad token** | The receiver rejected `MEMO_TOKEN`; memos are kept. |
@@ -54,9 +56,11 @@ turns it into a transcribed note in Obsidian.
 - `memo_queue.cpp`: WAV files in LittleFS, `/q/<seq>_<unix time>.wav`, written
   as `.part` and renamed, so a crash never leaves half a memo in the queue.
   The sequence number is kept in NVS.
-- `uploader.cpp`: tries each network (8 s each), syncs the clock over NTP if
+- `uploader.cpp`: scans once (about 1.5 s) and joins the first listed network in
+  range on the channel it was found on, with Wi-Fi power-save off. It syncs the clock over NTP if
   it isn't set (the clock keeps running through deep sleep), then POSTs each
-  memo over HTTPS with the Let's Encrypt roots in `ca_certs.h`. It deletes a
+  memo over HTTPS (read into PSRAM and sent in one write) with the Let's Encrypt
+  roots in `ca_certs.h`. It deletes a
   memo only after a 2xx. The memo id is `<MAC>-<seq>`, so a re-send after a
   lost reply isn't duplicated.
 - Partitions (`partitions.csv`): 2.5 MB app, about 5.4 MB LittleFS queue.

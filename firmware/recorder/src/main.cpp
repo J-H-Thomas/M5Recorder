@@ -217,7 +217,8 @@ void showProgress(size_t sent, size_t remaining) {
     char detail[48];
     switch (r.outcome) {
       case uploader::Outcome::AllSent:
-        snprintf(detail, sizeof(detail), "%u memo%s", (unsigned)r.sent, r.sent == 1 ? "" : "s");
+        snprintf(detail, sizeof(detail), "%u memo%s, %.0f KB/s", (unsigned)r.sent, r.sent == 1 ? "" : "s",
+                 r.upload_ms ? r.bytes / 1.024f / r.upload_ms : 0.0f);
         show("Sent", detail);
         break;
       case uploader::Outcome::NoWifi:
