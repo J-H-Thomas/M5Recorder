@@ -60,6 +60,15 @@ size_t freeBytes() {
   return used + SPARE < total ? total - used - SPARE : 0;
 }
 
+size_t capacityBytes() {
+  // LittleFS itself uses a few blocks (root and /q directories), so this is
+  // measured against an empty queue rather than the raw partition size.
+  size_t queued = 0;
+  File dir = LittleFS.open(DIR);
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) { queued += f.size(); }
+  return freeBytes() + queued;
+}
+
 bool save(const int16_t* samples, size_t n, uint32_t sample_rate, uint32_t seq, uint32_t time) {
   const size_t data_bytes = n * sizeof(int16_t);
   if (data_bytes + WAV_HEADER > freeBytes()) { return false; }

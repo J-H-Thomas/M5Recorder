@@ -14,7 +14,8 @@ struct Entry {
 
 bool begin();                 // mounts LittleFS (formats it on first use)
 size_t count();
-size_t freeBytes();
+size_t freeBytes();      // room left for memos
+size_t capacityBytes();  // room for memos when the queue is empty
 
 // Writes a 16 kHz mono 16-bit WAV. False if there isn't room or the write failed.
 bool save(const int16_t* samples, size_t n, uint32_t sample_rate, uint32_t seq, uint32_t time);

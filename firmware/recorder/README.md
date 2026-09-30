@@ -30,6 +30,15 @@ turns it into a transcribed note in Obsidian.
 | **Bad token** | The receiver rejected `MEMO_TOKEN`; memos are kept. |
 | **Queue full** | About 2.8 minutes of audio are waiting; new memos can't be saved until they're sent. |
 
+- **Side button (KEY2): status screen** for 5 s (press again to close):
+  - Battery % with its voltage and whether it's charging. The % is estimated
+    from voltage (the StickS3 has no fuel gauge), so treat it as approximate;
+    it reads high while charging.
+  - Storage free % and how many minutes of audio still fit.
+  - How many memos are waiting to send.
+
+  Pressing the front button while it's showing starts a recording.
+- "BATTERY LOW" appears under **Saved** when the battery is at 20% or less.
 - Taps shorter than 0.5 s are ignored.
 - Pressing the button while it's uploading stops the upload and starts a new
   recording straight away.

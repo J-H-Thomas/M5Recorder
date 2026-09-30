@@ -61,6 +61,11 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
   SSID before the hotspot. Planned fix: scan first and join a known network in
   range, turn Wi-Fi sleep off during uploads, write in bigger chunks, and log
   the upload rate.
+- **KEY2 status screen (2026-09-30, Jay's request):** KEY2 (G12) wakes the
+  stick via ext1 (alongside ext0 on KEY1) and shows battery % (M5Unified's
+  voltage-based estimate via the M5PM1, plus volts and charging state),
+  storage free % and minutes left, and the queue count. "BATTERY LOW" (≤20%)
+  appears after saving. Builds; not yet run on the device.
 - Other ideas: hide the Docker health-check lines in the receiver's access log.
   Jay still has to set up sync for the Memex vault.
 
