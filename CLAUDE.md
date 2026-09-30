@@ -105,6 +105,7 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
     release, press opens the status screen (no hold needed). A rejected KEY2
     press sleeps at once and counts as ignored. Before, a pocket press lit the
     screen for 5 s (about 0.08 mAh, roughly 8x a rejected KEY1 press).
+    Tested on the device by Jay (2026-09-30): works.
   - **Held buttons**: `deepSleep()` arms ext0/ext1 to wake on *release* for a
     button that's held (an RTC flag says so), and that wake sleeps again at once.
     Before this, `sleepNow()` spun awake until release.
