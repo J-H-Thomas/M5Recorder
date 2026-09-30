@@ -25,14 +25,32 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
 
 - **Receiver (2026-09-30):** 10 tests pass. Run locally end to end with the
   `base` model: a TTS test memo was transcribed word for word; the retry-on-restart
-  and duplicate-id paths were checked live. **Not yet deployed** on the MS-01, and
-  there's no Pangolin resource yet.
+  and duplicate-id paths were checked live.
+- **Deployed on the MS-01 (2026-09-30, by a Claude session on the server):**
+  - Container `m5recorder-receiver` (Compose Manager project `m5recorder`), host
+    port 8090, user 99:100, large-v3-turbo on CPU int8 (no GPU).
+  - Source is in /mnt/user/appdata/m5recorder/src (rebuild with
+    `docker build -t m5recorder-receiver .../src/server`, then recreate the
+    container through the compose project). Data and models are in
+    /mnt/user/appdata/m5recorder/{data,models}. The token is in the project's
+    `.env` (root only).
+  - Vault /mnt/user/Obsidian/Memex (new; notes in Memos/, audio in Memos/audio/).
+    **Not synced to any device yet** (Jay's decision).
+  - Pangolin resource "m5-memos" → http://10.10.1.201:8090. Public name
+    **https://memos.asdf.ac**. Login is on, with bypass rules for `/upload` and
+    `/health` only. From outside: health ok, no token → 401, and a test upload
+    was queued. The ids deploy-test-1 and deploy-test-2 are used.
+  - **TLS:** Let's Encrypt "Gen Y" chain: leaf ← YR1 ← ISRG Root YR (sent
+    cross-signed by ISRG Root X1). It verifies with X1 alone, and with Root YR
+    alone. The server accepts TLS 1.2 with ECDHE-RSA-AES-GCM, which ESP-IDF 4.4's
+    mbedTLS needs (it has no TLS 1.3). `ca_certs.h` holds X1, X2, YR and YE.
 - **Recorder firmware (2026-09-30):** builds (flash 1.17 of 2.5 MB). **Not yet
   flashed or run**: needs a real `secrets.h` (Wi-Fi, URL, token) and the receiver
   reachable.
-- Next: Jay deploys the receiver on Unraid and adds the Pangolin resource. Test
-  with curl from outside, flash the recorder, then test at home, on the hotspot,
-  and offline (queue + retry).
+- Next: Jay fills in `secrets.h` (Wi-Fi and token; UPLOAD_URL is already set).
+  Then flash the recorder and test at home, on the hotspot, and offline (queue +
+  retry). Watch `docker logs -f m5recorder-receiver` on the server for
+  "received <id>" and "memo <id> -> <file>.md", and time the transcription.
 
 ## Wake-latency experiment (history)
 
