@@ -1,18 +1,24 @@
-"""Background transcription: one memo at a time, in upload order."""
+"""Background transcription: one memo at a time, in upload order. Failures are
+retried with backoff; after MAX_ATTEMPTS the note says so, with the audio."""
 
 import logging
 import queue
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+from . import notes
 from .config import Settings
-from .notes import atomic_write_bytes, render_note, unique_path
-from .store import Store
+from .store import DONE, GAVE_UP, Memo, Store
 
 log = logging.getLogger("memos.worker")
+
+MAX_ATTEMPTS = 5
+RETRY_BASE_S = 60        # 1, 4, 16, 64 min between attempts
+POLL_S = 30              # how often to look for retries that are due
 
 
 class Transcriber(Protocol):
@@ -67,6 +73,25 @@ class Worker:
         self._queue: queue.Queue[str] = queue.Queue()
         self._thread: threading.Thread | None = None
 
+    # --- notes ---------------------------------------------------------------
+
+    def new_note_path(self, audio_path: str) -> str:
+        """Picks the note path for a new memo (same stem as its audio)."""
+        s = self._settings
+        s.notes_dir.mkdir(parents=True, exist_ok=True)
+        note = notes.unique_path(s.notes_dir, Path(audio_path).stem, ".md")
+        return note.relative_to(s.vault_dir).as_posix()
+
+    def write_note(self, memo: Memo, note_path: str, body: str, status: str) -> None:
+        s = self._settings
+        created = datetime.fromtimestamp(memo.created, ZoneInfo(s.timezone))
+        notes.atomic_write_bytes(s.vault_dir / note_path, notes.render_note(
+            created=created, duration=memo.duration, device=memo.device, memo_id=memo.memo_id,
+            audio_rel=memo.audio_path, body=body, status=status, time_source=memo.time_source,
+        ).encode("utf-8"))
+
+    # --- queue -----------------------------------------------------------------
+
     def enqueue(self, memo_id: str) -> None:
         self._queue.put(memo_id)
 
@@ -80,9 +105,23 @@ class Worker:
         self._thread = threading.Thread(target=self._run, name="transcriber", daemon=True)
         self._thread.start()
 
+    def alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def _run(self) -> None:
         while True:
-            self.process(self._queue.get())
+            try:
+                memo_id = self._queue.get(timeout=POLL_S)
+            except queue.Empty:
+                memo_id = None
+            try:  # nothing may kill this thread
+                if memo_id:
+                    self.process(memo_id)
+                else:
+                    for due in self._store.due_retries(time.time()):
+                        self.process(due)
+            except Exception:
+                log.exception("worker loop error")
 
     def run_pending(self) -> None:
         """Process everything queued, on the calling thread (tests)."""
@@ -91,20 +130,22 @@ class Worker:
 
     def process(self, memo_id: str) -> None:
         memo = self._store.get(memo_id)
-        if memo is None or memo.status == "done":
+        if memo is None or memo.status in (DONE, GAVE_UP):
             return
-        s = self._settings
+        note_path = memo.note_path
+        if note_path is None:  # uploaded before placeholder notes existed
+            note_path = self.new_note_path(memo.audio_path)
+            self._store.set_note_path(memo_id, note_path)
         try:
-            text = self._transcribe(s.vault_dir / memo.audio_path)
-            created = datetime.fromtimestamp(memo.created, ZoneInfo(s.timezone))
-            s.notes_dir.mkdir(parents=True, exist_ok=True)
-            note = unique_path(s.notes_dir, Path(memo.audio_path).stem, ".md")
-            atomic_write_bytes(note, render_note(
-                created=created, duration=memo.duration, device=memo.device,
-                memo_id=memo.memo_id, audio_rel=memo.audio_path, transcript=text,
-            ).encode("utf-8"))
-            self._store.mark_done(memo_id, note.relative_to(s.vault_dir).as_posix())
-            log.info("memo %s -> %s", memo_id, note.name)
-        except Exception as e:  # keep the worker alive; retried on next start
-            log.exception("transcription failed for %s", memo_id)
-            self._store.mark_failed(memo_id, repr(e))
+            text = self._transcribe(self._settings.vault_dir / memo.audio_path)
+            self.write_note(memo, note_path, text.strip() or notes.NO_SPEECH, "done")
+            self._store.mark_done(memo_id, note_path)
+            log.info("memo %s -> %s", memo_id, Path(note_path).name)
+        except Exception as e:
+            attempts = self._store.mark_failed(
+                memo_id, repr(e), time.time() + RETRY_BASE_S * 4 ** memo.attempts)
+            log.exception("transcription failed for %s (attempt %d of %d)", memo_id, attempts, MAX_ATTEMPTS)
+            if attempts >= MAX_ATTEMPTS:
+                self.write_note(memo, note_path, notes.FAILED, "failed")
+                self._store.mark_gave_up(memo_id)
+                log.error("gave up on %s; note written without a transcript", memo_id)
