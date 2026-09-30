@@ -127,8 +127,10 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
   only sets it for CoreMatrix/ToughC5 and never touches it for the StickS3, so
   it stayed at its power-up "on". The firmware clears the bit after
   `M5.begin()` (the PM1 keeps it through deep sleep). A typical indicator LED
-  draws 1–2 mA against about 0.1 mA for the sleeping stick. Not yet confirmed on
-  the device; if it stays on unplugged, it's something else.
+  draws 1–2 mA against about 0.1 mA for the sleeping stick. **Confirmed by Jay
+  (2026-09-30): the LED goes off and stays off unplugged, and everything else
+  still works.** It was probably the biggest battery drain until now; the
+  roadmap's battery telemetry will show the real figure.
 
 ## Wake-latency experiment (history)
 
