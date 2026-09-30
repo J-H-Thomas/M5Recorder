@@ -19,9 +19,14 @@ The user is now working locally with the device on USB.
   wake it writes the ES8311 registers and starts I2S + a capture task *before*
   `M5.begin()`, so the display comes up while it's already recording. Adds a
   `gap` figure (longest zero run after audio starts) to catch codec resets or
-  overruns. Builds cleanly; **not yet run on hardware**.
-- Next: run the fast version (a few 4 s holds), check "one" survives, then measure
-  the sleep-current cost of keeping L3B on.
+  overruns. **Run on hardware 2026-09-30:** setup 52, mic **55** ms (was 516),
+  M5.begin 463 ms (now after the mic), audio +0, speech +0, gap 0. "One" is caught
+  most times. speech +0 means the user was already talking at the first sample,
+  so the remaining misses come from ROM + bootloader + Arduino start-up before
+  `setup()`, which the app can't see.
+- Next: measure the sleep-current cost of keeping L3B on; optionally cut boot time
+  before `setup()` (bootloader image check on wake, PSRAM memtest, log level: these
+  need a custom sdkconfig, e.g. pioarduino / Arduino as an ESP-IDF component).
 - After that: build the real recorder firmware (step 1) and the computer-side
   receiver + Whisper (step 2). A phone link is deferred.
 
