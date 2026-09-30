@@ -18,6 +18,11 @@ services:
       WHISPER_DEVICE: "cpu"
       WHISPER_COMPUTE: "int8"
       LANGUAGE: "en"
+      # Home Assistant via MQTT discovery (leave MQTT_HOST unset to turn off).
+      MQTT_HOST: "homeassistant.local"
+      MQTT_PORT: "1883"
+      MQTT_USER: "m5recorder"
+      MQTT_PASSWORD: "change-me"
     volumes:
       - /mnt/user/obsidian/MyVault:/vault
       - /mnt/user/appdata/m5recorder/data:/data

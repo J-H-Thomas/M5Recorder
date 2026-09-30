@@ -58,6 +58,22 @@ class Store:
         for name, kind in _ADDED_COLUMNS.items():
             if name not in have:
                 self._db.execute(f"ALTER TABLE memos ADD COLUMN {name} {kind}")
+        # Battery and queue reports from the stick (every upload and heartbeat).
+        self._db.execute(
+            """CREATE TABLE IF NOT EXISTS telemetry (
+                 ts          REAL NOT NULL,
+                 device      TEXT NOT NULL,
+                 kind        TEXT NOT NULL,
+                 battery_mv  INTEGER,
+                 battery_pct INTEGER,
+                 charging    INTEGER,
+                 queue       INTEGER,
+                 set_aside   INTEGER,
+                 ignored     INTEGER,
+                 firmware    TEXT
+               )"""
+        )
+        self._db.execute("CREATE INDEX IF NOT EXISTS telemetry_device_ts ON telemetry (device, ts)")
 
     def get(self, memo_id: str) -> Memo | None:
         with self._lock:
@@ -124,3 +140,44 @@ class Store:
         with self._lock:
             rows = self._db.execute("SELECT status, COUNT(*) FROM memos GROUP BY status").fetchall()
         return {status: n for status, n in rows}
+
+    def memos_since(self, device: str, since: float) -> int:
+        with self._lock:
+            return self._db.execute(
+                "SELECT COUNT(*) FROM memos WHERE device = ? AND created >= ?", (device, since)
+            ).fetchone()[0]
+
+    # --- telemetry -------------------------------------------------------------
+
+    def add_telemetry(self, t) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO telemetry (ts, device, kind, battery_mv, battery_pct, charging, queue,"
+                " set_aside, ignored, firmware) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (t.ts, t.device, t.kind, t.battery_mv, t.battery_pct,
+                 None if t.charging is None else int(t.charging),
+                 t.queue, t.set_aside, t.ignored, t.firmware),
+            )
+
+    def latest_telemetry(self, device: str) -> dict | None:
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT ts, device, kind, battery_mv, battery_pct, charging, queue, set_aside, ignored,"
+                " firmware FROM telemetry WHERE device = ? ORDER BY ts DESC LIMIT 1", (device,)
+            )
+            row = cur.fetchone()
+            names = [d[0] for d in cur.description]
+        return dict(zip(names, row)) if row else None
+
+    def battery_history(self, device: str, since: float) -> list[tuple[float, int, bool]]:
+        """(ts, battery %, charging) oldest first, for reports that had a battery reading."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, battery_pct, charging FROM telemetry WHERE device = ? AND ts >= ?"
+                " AND battery_pct IS NOT NULL ORDER BY ts", (device, since)
+            ).fetchall()
+        return [(ts, pct, bool(ch)) for ts, pct, ch in rows]
+
+    def telemetry_devices(self) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self._db.execute("SELECT DISTINCT device FROM telemetry")]

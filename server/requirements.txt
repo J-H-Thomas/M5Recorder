@@ -6,3 +6,4 @@ faster-whisper==1.1.1
 huggingface-hub>=0.26,<1
 requests>=2.32,<3
 tzdata==2025.2
+paho-mqtt==2.1.0

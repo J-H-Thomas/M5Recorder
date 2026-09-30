@@ -66,10 +66,12 @@ def load_audio(path: Path):
 
 
 class Worker:
-    def __init__(self, settings: Settings, store: Store, transcribe: Transcriber):
+    def __init__(self, settings: Settings, store: Store, transcribe: Transcriber,
+                 on_change=None):
         self._settings = settings
         self._store = store
         self._transcribe = transcribe
+        self._on_change = on_change  # called with the device after a memo is done or given up
         self._queue: queue.Queue[str] = queue.Queue()
         self._thread: threading.Thread | None = None
 
@@ -149,3 +151,5 @@ class Worker:
                 self.write_note(memo, note_path, notes.FAILED, "failed")
                 self._store.mark_gave_up(memo_id)
                 log.error("gave up on %s; note written without a transcript", memo_id)
+        if self._on_change:
+            self._on_change(memo.device)

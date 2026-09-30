@@ -75,6 +75,31 @@ Remember to book the car in for its MOT next week.
 | `WHISPER_COMPUTE` | `int8` | `int8` on CPU; `float16` or `int8_float16` on an NVIDIA GPU. |
 | `LANGUAGE` | `en` | Empty for auto-detect. |
 | `MAX_UPLOAD_MB` | `20` | About 10 minutes of 16 kHz audio. |
+| `MQTT_HOST` | (off) | MQTT broker for Home Assistant (e.g. the Mosquitto add-on). Unset = no HA. |
+| `MQTT_PORT` | `1883` | |
+| `MQTT_USER` / `MQTT_PASSWORD` | | A broker login (for the Mosquitto add-on, an HA user made for this). |
+| `MQTT_DISCOVERY_PREFIX` | `homeassistant` | HA's MQTT discovery prefix. |
+
+## Home Assistant
+
+With `MQTT_HOST` set, each stick appears in HA (via MQTT discovery) as an
+**M5Recorder** device with these sensors:
+- battery %, battery voltage and charging;
+- last seen;
+- memos waiting and memos set aside;
+- memos today;
+- estimated days left (from the battery trend since the last charge);
+- memos transcribing and transcription failures;
+- ignored presses and firmware.
+
+The receiver's own online/offline state is the entities' availability (an MQTT
+last will), so HA also sees when the receiver is down. Values update on every
+upload and heartbeat (the stick checks in every 6 h), after each
+transcription, and every 10 minutes.
+
+The stick reports through headers on `/upload` and on `POST /heartbeat`
+(same bearer token): `X-Battery-mV`, `X-Battery-Pct`, `X-Charging` (0/1),
+`X-Queue`, `X-Set-Aside`, `X-Ignored` and `X-Firmware`.
 
 Volumes: `/vault` (the Obsidian vault), `/data` (the memo database), and
 `/models` (downloaded Whisper models, about 1.6 GB for large-v3-turbo; the

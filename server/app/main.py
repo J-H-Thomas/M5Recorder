@@ -19,8 +19,9 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import notes
+from . import notes, telemetry
 from .config import Settings
+from .ha import HaPublisher, Publish
 from .notes import unique_path
 from .store import FAILED, GAVE_UP, PENDING, Memo, Store
 from .worker import Transcriber, WhisperTranscriber, Worker
@@ -60,29 +61,53 @@ def memo_time(memo_time: int, device_now: int, now: float) -> tuple[float, str]:
     return min(memo_time, now), "device"
 
 
+def _check_token(request: Request, token: str) -> None:
+    """Checked before anything else, so an unauthenticated request learns
+    nothing from other errors."""
+    authorization = request.headers.get("authorization", "")
+    if not hmac.compare_digest(authorization.encode(), f"Bearer {token}".encode()):
+        client = request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")
+        log.warning("rejected %s: bad token (from %s)", request.url.path, client)
+        raise HTTPException(401, "bad token")
+
+
 def create_app(settings: Settings, transcribe: Transcriber | None = None,
-               start_worker: bool = True) -> FastAPI:
+               start_worker: bool = True, ha_publish: Publish | None = None) -> FastAPI:
     store = Store(settings.data_dir / "memos.db")
-    worker = Worker(settings, store, transcribe or WhisperTranscriber(settings))
+    ha = HaPublisher(settings, lambda device: telemetry.status(store, device, settings.timezone),
+                     store.telemetry_devices, publish=ha_publish)
+    worker = Worker(settings, store, transcribe or WhisperTranscriber(settings), on_change=ha.update)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         settings.audio_dir.mkdir(parents=True, exist_ok=True)
         settings.notes_dir.mkdir(parents=True, exist_ok=True)
-        log.info("vault %s, notes in %s, time zone %s, model %s on %s",
+        log.info("vault %s, notes in %s, time zone %s, model %s on %s, Home Assistant %s",
                  settings.vault_dir, settings.notes_subdir, settings.timezone,
-                 settings.whisper_model, settings.whisper_device)
+                 settings.whisper_model, settings.whisper_device,
+                 f"via MQTT {settings.mqtt_host}:{settings.mqtt_port}" if settings.mqtt_host else "off")
         if start_worker:
             n = worker.requeue_unfinished()
             if n:
                 log.info("re-queued %d unfinished memo(s)", n)
             worker.start()
+        ha.start()
         yield
+        ha.stop()
 
     app = FastAPI(title="M5Recorder receiver", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.worker = worker
+    app.state.ha = ha
+
+    def record_telemetry(request: Request, device: str, kind: str) -> bool:
+        t = telemetry.from_headers(request.headers, device, kind)
+        if t is None:
+            return False
+        store.add_telemetry(t)
+        ha.update(device)
+        return True
 
     @app.get("/health")
     def health():
@@ -97,15 +122,20 @@ def create_app(settings: Settings, transcribe: Transcriber | None = None,
         }
         return JSONResponse(body, status_code=200 if alive else 503)
 
+    @app.post("/heartbeat")
+    def heartbeat(request: Request):
+        """The stick checking in (every 6 h when it has nothing to upload)."""
+        _check_token(request, settings.token)
+        device = request.headers.get("x-memo-device", "")
+        if not DEVICE_RE.match(device):
+            raise HTTPException(400, "X-Memo-Device missing or invalid")
+        if not record_telemetry(request, device, "heartbeat"):
+            raise HTTPException(400, "no telemetry headers")
+        return {"status": "ok"}
+
     @app.post("/upload")
     async def upload(request: Request):
-        # The token is checked before anything else, so an unauthenticated
-        # request learns nothing from other errors.
-        authorization = request.headers.get("authorization", "")
-        if not hmac.compare_digest(authorization.encode(), f"Bearer {settings.token}".encode()):
-            client = request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")
-            log.warning("rejected upload: bad token (from %s)", client)
-            raise HTTPException(401, "bad token")
+        _check_token(request, settings.token)
 
         memo_id = request.headers.get("x-memo-id", "")
         if not MEMO_ID_RE.match(memo_id):
@@ -113,6 +143,8 @@ def create_app(settings: Settings, transcribe: Transcriber | None = None,
         device = request.headers.get("x-memo-device") or memo_id.split("-", 1)[0]
         if not DEVICE_RE.match(device):
             raise HTTPException(400, "X-Memo-Device invalid")
+        # Battery/queue report: recorded whatever becomes of the memo itself.
+        record_telemetry(request, device, "upload")
         x_memo_time = _int_header(request, "x-memo-time")
         device_now = _int_header(request, "x-device-now")
 
@@ -179,12 +211,23 @@ def create_app(settings: Settings, transcribe: Transcriber | None = None,
         except OSError:
             log.exception("couldn't write the placeholder note for %s", memo_id)
         worker.enqueue(memo_id)
+        ha.update(device)  # memos today
         log.info("received %s (%.1f s, time %s) -> %s", memo_id, duration, time_source, final.name)
         return {"status": "queued"}
 
     return app
 
 
+class _SkipHealthChecks(logging.Filter):
+    """Drops the once-a-minute Docker health check (and Pangolin probe) lines
+    from the access log; /health failures still show as 503s elsewhere."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args if isinstance(record.args, tuple) else ()
+        return not (len(args) >= 5 and args[2] == "/health" and args[4] == 200)
+
+
 def build() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("uvicorn.access").addFilter(_SkipHealthChecks())
     return create_app(Settings.from_env())

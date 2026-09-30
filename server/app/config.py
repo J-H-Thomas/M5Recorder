@@ -21,6 +21,12 @@ class Settings:
     whisper_compute: str = "int8"
     whisper_model_dir: Path | None = None
     language: str | None = "en"
+    # Home Assistant via MQTT discovery (off unless mqtt_host is set).
+    mqtt_host: str | None = None
+    mqtt_port: int = 1883
+    mqtt_user: str | None = None
+    mqtt_password: str | None = None
+    mqtt_discovery_prefix: str = "homeassistant"
 
     @property
     def notes_dir(self) -> Path:
@@ -51,4 +57,9 @@ class Settings:
             whisper_compute=os.environ.get("WHISPER_COMPUTE", "int8"),
             whisper_model_dir=Path(model_dir) if model_dir else None,
             language=os.environ.get("LANGUAGE", "en") or None,
+            mqtt_host=os.environ.get("MQTT_HOST") or None,
+            mqtt_port=int(os.environ.get("MQTT_PORT", "1883")),
+            mqtt_user=os.environ.get("MQTT_USER") or None,
+            mqtt_password=os.environ.get("MQTT_PASSWORD") or None,
+            mqtt_discovery_prefix=os.environ.get("MQTT_DISCOVERY_PREFIX", "homeassistant"),
         )
