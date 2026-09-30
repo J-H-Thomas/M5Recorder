@@ -1,141 +1,181 @@
-# M5Recorder roadmap: tidy-up after the first working version (2026-09-30)
+# M5Recorder roadmap
 
-## Context
+Status on 2026-09-30: the chain works end to end. The stick records (press,
+release, press and hold), joins the phone hotspot in about 1 s, and reaches the
+receiver about 5 s after release. The MS-01 transcribes (large-v3-turbo) into
+the Memex vault, which syncs to the phone within seconds.
 
-The memo chain works end to end: the stick records, joins the phone hotspot in
-about 1 s, and reaches the server about 5 s after release. The MS-01 transcribes
-(large-v3-turbo), the note lands in the Memex vault, and vault sync puts it on
-Jay's phone almost instantly. Jay wants a tidy-up roadmap and picked:
-**OTA updates, a prebuilt server image, quieter logs, a battery life check,
-a repo and docs tidy, and the home Wi-Fi test.**
-
-Current pain points these address:
-- Every firmware change needs USB and download mode (hold the side button 2 s).
-- The server is rebuilt from source on Unraid by hand.
-- Battery life is unknown: there's only a voltage-based % on the KEY2 screen.
-- The receiver log is mostly once-a-minute health checks.
-- The repo has CRLF warnings, a long CLAUDE.md, and no CI.
-
-Order: quick, low-risk server and repo work first. Then battery telemetry, which
-starts collecting data early. Then OTA last, since it needs one final USB flash
-and a partition change.
+This roadmap was re-ordered after three independent reviews (firmware, server,
+whole system) on 2026-09-30. **Data safety comes first**: the reviews found
+several ways memos can be lost silently. OTA comes last and uses the app
+rollback that the Arduino core's bootloader already supports.
 
 ## Phase 0: field fixes (done 2026-09-30)
 
 After carrying the stick for an evening:
-- **Pocket presses**: recording now needs press, release, press and hold; other
-  presses sleep again at once without lighting the screen. Memos max 60 s. A held
-  button no longer keeps the stick awake (it sleeps until the release).
-- **Hotspot with no internet stuck on "Sending..."**: TLS/HTTP timeouts cut
-  from the core's 120 s handshake / 30 s reads to 10–15 s, plus a per-request
-  watchdog that forces sleep. It shows **No internet**, and retries back off
-  15 → 30 → 60 → 120 min.
+- **Pocket presses**: recording needs press, release, press and hold; the
+  status screen needs press, release, press. Other presses sleep again at once
+  without lighting the screen. Memos are capped at 60 s. A held button no
+  longer keeps the stick awake (it sleeps until the release).
+- **Hotspot with no internet stuck on "Sending..."**: TLS/HTTP timeouts are cut
+  from the core's 120 s handshake / 30 s reads to 10–15 s, with a per-request
+  watchdog that forces sleep. The screen shows **No internet**, and retries
+  back off 15 → 30 → 60 → 120 min.
+- **Green LED always on**: PM1 LED_EN is now cleared (it probably drew more
+  than the whole sleeping stick).
 
-## Phase 1: server and repo housekeeping (no stick changes)
+## Phase 1: data safety (small, do first)
 
-1. **Quieter logs**: `server/app/main.py`, in `build()`: add a `logging.Filter`
-   on the `uvicorn.access` logger that drops `GET /health` lines (Docker
-   HEALTHCHECK and Pangolin probes). Keep uploads and errors. Test: the filter
-   drops health lines and keeps upload lines.
-2. **Prebuilt image**: `.github/workflows/server.yml`. On pushes to `main` that
-   touch `server/`: run `pytest`, then build and push
-   `ghcr.io/j-h-thomas/m5recorder-receiver:latest` and `:sha-<short>` (public
-   package; the image holds no secrets). Change `server/docker-compose.yml` and
-   the README to `image: ghcr.io/...` (drop `build:`). Give Jay a prompt for the
-   Unraid Claude session to switch the Compose Manager project to the pulled
-   image. Updating is then "pull + recreate". Keep the `.env` (token) and
-   volumes as they are.
-3. **Repo and docs tidy**
-   - `.gitattributes`: `* text=auto eol=lf`, with `*.bat`/`*.cmd` as `crlf` (ends
-     the CRLF warnings; renormalise in one commit).
-   - `.github/workflows/firmware.yml`: `pio run` for `firmware/recorder` with
-     `secrets.example.h` copied to `secrets.h` (compile check only; artifacts are
-     never published, since real builds contain Wi-Fi passwords).
-   - Trim `CLAUDE.md` to layout, status, decisions and gotchas. Move the
-     wake-test history to `firmware/wake_test/RESULTS.md` and mark `wake_test`
-     as an archived experiment in its README.
-   - Update the root README (architecture, links, how to update the stick and
-     the server).
+1. **Unique memo ids** (all three reviews). The id `<MAC>-<seq>` restarts
+   if NVS is wiped (full flash erase, or the Arduino core erasing NVS on
+   NO_FREE_PAGES / NEW_VERSION_FOUND). The server then answers "duplicate" and
+   the stick deletes new memos. Fix:
+   - Stick: add a random 32-bit epoch, kept in NVS and regenerated whenever the
+     seq is missing: `<MAC>-<epoch>-<seq>`.
+   - Server: store the body's size and sha256; a known id with different
+     content → **409**. The stick keeps the memo on 409 and deletes only on a
+     2xx whose body says `queued` or `duplicate`.
+2. **A bad memo mustn't block the queue.** A 400 or 413 is retried forever and
+   blocks every later memo. Fix:
+   - Stick: on a 4xx other than 401/408/429, rename to `.bad` (kept, out of
+     the queue) and carry on.
+   - Server: accept only 16 kHz mono 16-bit WAV; compute the duration from the
+     bytes received, not the header.
+3. **Transcription failures must be visible and retried.** Today a failed memo
+   gets no note, is retried only at container restart, and the worker thread can
+   die silently while `/health` says ok. Fix:
+   - Write a placeholder note at upload time ("transcribing…", with the audio
+     embedded) and fill in the transcript later.
+   - Catch everything in the worker loop.
+   - Retry failed memos on a timer with backoff.
+   - After N attempts, write "transcription failed" with the audio embedded.
+   - `/health` reports worker liveness and failed/unfinished counts.
+4. **The stick mustn't destroy memos itself.**
+   - Don't delete a memo when opening, allocating or reading it fails (only if
+     it's shorter than a WAV header).
+   - Don't format LittleFS on the first mount failure: show the error; format
+     only as a last resort.
+   - Clean `.part` strays in `memo_queue::begin()`.
+5. **Retry timer from an absolute deadline.** Every short wake (ignored press,
+   button release, status screen) currently re-arms the full interval, so at
+   120 min a pocket press every hour means it never fires. Keep the deadline
+   in RTC memory and arm the timer with the time remaining. Needed before the
+   Phase 2 heartbeat.
+6. **Clock accuracy.** The sleep clock is the internal RC oscillator
+   (`CONFIG_ESP32S3_RTC_CLK_SRC_INT_RC`), and NTP runs only while the clock is
+   unset, so memo times drift over weeks. Fix:
+   - Sync NTP on every upload round.
+   - Send `X-Device-Now` so the server can correct `X-Memo-Time` by the offset.
+   - Add `time_source:` (device / corrected / received) to the note frontmatter.
+7. **Small firmware fixes**:
+   - A memo that hits the 60 s cap while KEY1 is still held must wait for the
+     release before uploading (today it counts as "interrupted" and waits
+     15+ min).
+   - Show a certificate/TLS failure as its own error, not "No internet"
+     (check `tls.lastError()`).
+   - The upload watchdog must also power down the codec and the LCD. Drop
+     `esp_wifi_stop()` from the timer callback; deep sleep powers the RF down.
+   - Force the watchdog to fire once in a test (a server that accepts TCP and
+     then stalls).
+8. **Docs and repo cleanup**:
+   - Bring `CLAUDE.md` up to date (stale lines: hold-to-record, "vault not
+     synced", fixed 15 min retry, `fast-wake` branch, GPU unknown, "ignore
+     presses under 0.5 s", resolved risks).
+   - Remove the server's LAN address from `CLAUDE.md`.
+   - Use a placeholder device id in the server README example.
+   - Fix the "side button" vs power button wording.
+   - `.gitignore`/`.dockerignore`: add `server/data/`, `server/vault/`, `.env`
+     and `*.wav`.
+   - Add `.gitattributes` (LF) to end the CRLF warnings.
 
-## Phase 2: battery life check (telemetry)
+## Phase 2: know that it's working
 
-Goal: know when the stick will run out and how many days a charge lasts,
-without a meter.
+1. **Battery telemetry.** Stick:
+   - Read the battery at wake, before Wi-Fi (TX sags the voltage).
+   - Send `X-Battery-mV`, `X-Battery-Pct`, `X-Charging`, `X-Queue` and
+     `X-Firmware` on every upload.
+   - Add a heartbeat every 6 h (using the Phase 1 absolute deadlines).
 
-- **Stick** (`firmware/recorder/src/uploader.cpp`, `main.cpp`): add headers to
-  each upload: `X-Battery-mV`, `X-Battery-Pct`, `X-Charging`, `X-Queue`,
-  `X-Firmware` (version string from a build flag, e.g. git short hash + date).
-  Add a **heartbeat**: a timer wake every 6 h (alongside the 15 min retry when
-  memos are queued) that joins Wi-Fi and `POST /heartbeat` with the same headers.
-  Screen stays off. This gives a discharge curve even on days without memos.
-- **Receiver**: a `battery` table in the existing SQLite `Store`
-  (`server/app/store.py`), filled from uploads and heartbeats; `POST /heartbeat`
-  (same bearer token); `GET /battery.csv`. It also writes
-  **`<vault>/Memos/_M5Recorder status.md`**: last seen, battery % and voltage,
-  charging, queue, firmware version, memos today, and an estimated days left
-  (from the slope over the last few days). It syncs to the phone like the memos.
-  Tests for the table, endpoint and status note.
-- **After 3–5 days of data**: report the real drain (mAh/day while idle, and per
-  memo) and decide whether L3B-on-in-sleep or the heartbeat interval needs
-  changing. Analysis only, no code.
+   Server:
+   - A `battery` table and `POST /heartbeat`.
+   - A status note in the vault (`Memos/_M5Recorder status.md`): last seen,
+     battery, charging, queue, firmware, memos today, estimated days left.
+   - After 3–5 days of data, report the real drain and days per charge.
+2. **Push alerts** (the status note stops updating exactly when things break).
+   Via Home Assistant (already running) or ntfy, for:
+   - no heartbeat for 24 h;
+   - a transcription that failed after its retries;
+   - `unfinished` > 0 for over 1 h;
+   - the public `/health` failing (an external uptime check).
+3. **Low-battery guard.** Skip Wi-Fi below ~3.4–3.5 V, or after a brownout,
+   panic or watchdog reset, and sleep on a long timer (avoids a brownout loop
+   on a flat cell). Show "Battery low, charge me" on a press.
+4. **Queue nearly full warning** on the Saved screen (e.g. under 30 s left).
+5. **Quieter logs**: drop the Docker health-check access lines (after Phase 1.3,
+   so `/health` means something).
+6. **Home Wi-Fi test** (the only path not yet tested): a memo at home, then
+   walking out to the hotspot and back.
 
-## Phase 3: firmware updates over Wi-Fi (OTA)
+## Phase 3: storage and security (one USB flash)
 
-- **Partitions** (`firmware/recorder/partitions.csv`): two 1.75 MB app slots
-  (`ota_0`, `ota_1`; the app is 1.19 MB now) plus LittleFS 0x460000 (~4.4 MB).
-  The **queue drops from ~2.8 to ~2.2 min of audio.** This is the last USB flash.
-  It reformats the queue, so send any queued memos first.
-- **Receiver**: `/data/firmware/` (volume) holds `firmware.bin` and
-  `manifest.json` (`version`, `size`, `sha256`).
-  - `GET /firmware/manifest` and `GET /firmware/bin` use the stick's token.
-  - `POST /firmware` uploads a build and needs a **separate `ADMIN_TOKEN`**. It
-    lives only on the PC and server, so a token pulled from a stick can't push
-    firmware.
-- **Stick**: new `firmware/recorder/src/ota.cpp`.
-  - It checks the manifest after a successful upload round or a heartbeat,
-    reusing the Wi-Fi connection, at most every 6 h.
-  - It also checks on demand with a long press of KEY2 on the status screen,
-    which shows "Checking for update…".
-  - If the version differs and the battery is 30% or more (or it's charging):
-    show "Updating…", stream `/firmware/bin` into the Arduino `Update` class
-    while computing SHA-256, check the size and hash against the manifest,
-    `Update.end(true)`, then reboot.
-  - On any failure it keeps the current firmware and says so on screen.
-  - After reboot the status screen shows the new version.
-- **Publishing**: `tools/publish_firmware.py` builds with the local `secrets.h`,
-  reads the version, and POSTs the bin and manifest with `ADMIN_TOKEN`
-  (from an env var or a gitignored file).
-- **Safety**: ESP-IDF rollback isn't enabled in the Arduino bootloader, so a bad
-  build that can't reach Wi-Fi would need USB recovery. Mitigation: publish
-  only builds that passed a USB-flashed smoke test. Every build keeps the OTA
-  code path, and the KEY2 long press is the manual trigger.
+1. **Compress audio on the stick (IMA-ADPCM, 4×)** so the queue holds about
+   9–11 min instead of about 2.8 (OTA's partitions shrink it further). The
+   server decodes to PCM for Whisper and stores Opus/M4A in the vault: WAV is
+   about 5 GB/year synced to the phone, and phones don't play ADPCM WAV.
+2. **OTA partition layout**, in the same flash:
+   - Two app slots and a smaller LittleFS.
+   - **NVS stays at 0x9000; no full erase** (safe anyway after Phase 1.1).
+   - Send the queue before flashing.
+3. **Secrets out of the firmware.**
+   - Wi-Fi networks and the token go in NVS, set over USB serial (a small
+     provisioning command). This keeps secrets out of OTA images and makes
+     Wi-Fi or token changes cheap.
+   - The server accepts several tokens (`MEMO_TOKENS`) so they can be rotated.
+   - Consider putting the stick on an IoT/guest SSID (a lost stick still holds
+     its credentials).
+4. **Pin every Python dependency** (a lock or constraints file) before any
+   automated image build: the PyAV 19 break came from an unpinned transitive
+   dependency.
+5. **Server hardening**:
+   - Disable `openapi_url`.
+   - Validate or quote the device header in the YAML.
+   - Add `USER 99:100` to the image, plus CPU and memory limits for the
+     container.
+   - Log 401s (with X-Forwarded-For).
+   - A per-token daily byte quota.
+   - A random temp-file name per upload.
+   - Insert the DB row before the final rename, and sweep orphans at startup.
+6. **Backups**: a nightly `VACUUM INTO` of `memos.db`, and the vault included in
+   the Unraid backup.
 
-## Home Wi-Fi test (any time Jay is home)
+## Phase 4: firmware updates over Wi-Fi (OTA)
 
-- Record at home: the log/status shows the home network (the hotspot is first
-  in the list, but the "last good network" logic should settle on home).
-- Walk out of range, then record: it falls back to the hotspot, then switches
-  back at home. Record the connect times in CLAUDE.md.
+- **Rollback**: the core's bootloader has `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`,
+  but `initArduino()` marks every new image valid at boot. Override
+  `verifyRollbackLater()`, and call `esp_ota_mark_app_valid_cancel_rollback()`
+  after the first successful upload or heartbeat, **before the first deep
+  sleep** (every wake is a reboot, and a still-pending image is rolled back).
+- **Receiver**:
+  - Firmware manifest (`version`, `size`, `sha256`) and binary endpoints.
+  - **Not** on the public Pangolin bypass for publishing: `POST /firmware` is
+    LAN or SSO only, with a separate admin token.
+  - Optional: sign the manifest (ECDSA, key on the PC) so the server alone can't
+    push code.
+- **Stick**:
+  - Check after an upload round or heartbeat (no button trigger; a KEY2 long
+    press would clash with "press to close" on the status screen).
+  - Install only with battery ≥ 30% or charging.
+  - Verify size and hash.
+- **CA bundle**: OTA rides on the same TLS; plan how `ca_certs.h` gets
+  updated before Let's Encrypt changes roots again.
+- `tools/publish_firmware.py` builds and publishes (no secrets in the image
+  after Phase 3.3).
 
-## Later (not picked now)
+## Demoted / later
 
-Screen off while recording; catching "one" every time (boot-time work);
-longer offline queue (IMA-ADPCM, about 4×); smarter notes (title, summary,
-tags); links into daily notes; faster uploads (TLS session reuse).
-
-## Verification
-
-- Phase 1: `pytest` (with the new log-filter test) passes locally and in
-  Actions. The GHCR image appears. Unraid runs the pulled image
-  (`/health` ok through Pangolin, a test upload works). The firmware CI build is
-  green. `git status` shows no CRLF warnings after renormalising.
-- Phase 2: receiver tests for the heartbeat, battery table and status note. On
-  the stick, a memo's upload carries the battery headers, and the status note
-  appears in the vault on the phone. The heartbeat is visible in `battery.csv`
-  6 h later.
-- Phase 3: flash the new partitions over USB. Publish a build with a new
-  version and trigger with a KEY2 long press; the stick reboots showing the new
-  version. Publishing a corrupted bin fails the hash check and keeps the old
-  firmware. A normal memo still uploads after the update.
-- Each phase is committed and pushed to `main` when done, with docs updated
-  in the same commit.
+- **Prebuilt GHCR image via GitHub Actions**: for one server, a
+  `git pull && docker build && compose up -d` script is enough. If CI is added,
+  pin dependencies first and don't auto-update Unraid to `:latest`.
+- Screen off while recording; catching "one" every time (boot-time work; the
+  deep-sleep wake already skips image validation); smarter notes (title,
+  summary, tags); links into daily notes; TLS session reuse for faster uploads.
