@@ -21,6 +21,18 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
   (venv in `server/.venv`). See its README for Unraid and Pangolin setup.
 - `firmware/wake_test/`: the wake-latency experiment the recorder is based on.
 
+## Known-good versions (to roll back to)
+
+- **`v0.1.0-mvp`** (git tag, 2026-09-30): the first version that works end to end
+  in daily use, before the post-review roadmap.
+  - Stick: the exact flashed image (built with the real secrets, so private) is
+    in `C:\AI Working\M5Recorder-backups0.1.0-mvp\`, outside any repo, with
+    `RESTORE.md` (esptool command) and SHA256SUMS. Or check out the tag, restore
+    `secrets.h` and `pio run -t upload`.
+  - Server: the Unraid image should be tagged `m5recorder-receiver:v0.1.0-mvp`
+    (transitive Python dependencies aren't pinned yet, so a rebuild from the
+    tag may differ).
+
 ## Status
 
 - **Receiver (2026-09-30):** 10 tests pass. Run locally end to end with the
