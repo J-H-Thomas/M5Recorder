@@ -29,9 +29,22 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
     in `C:/AI Working/M5Recorder-backups/v0.1.0-mvp/`, outside any repo, with
     `RESTORE.md` (esptool command) and SHA256SUMS. Or check out the tag, restore
     `secrets.h` and `pio run -t upload`.
-  - Server: the Unraid image should be tagged `m5recorder-receiver:v0.1.0-mvp`
-    (transitive Python dependencies aren't pinned yet, so a rebuild from the
-    tag may differ).
+  - Server (done by the Unraid session, 2026-09-30): image
+    `m5recorder-receiver:v0.1.0-mvp` = the running image `fdf9b50c50e1` (a
+    rebuild from the tag may differ: transitive Python dependencies aren't
+    pinned yet). **Never run `docker image prune -a`**: it deletes unused
+    images, tags included. DB snapshot (VACUUM INTO, integrity checked, 24
+    memos): `/mnt/user/appdata/m5recorder/data/memos-v0.1.0-mvp.db`.
+  - Server rollback:
+    1. In `/boot/config/plugins/compose.manager/projects/m5recorder/docker-compose.yml`,
+       set `image: m5recorder-receiver:v0.1.0-mvp`, then recreate the container.
+    2. To restore the DB too: stop the container, copy the snapshot over
+       `memos.db`, **delete `memos.db-wal` and `memos.db-shm`** (or SQLite
+       replays the newer log onto it), then start the container.
+
+    Memo ids received after the snapshot are forgotten, which is harmless
+    because the stick's ids only go up. Note that Phase 1.1 changes the id
+    format.
 
 ## Status
 
