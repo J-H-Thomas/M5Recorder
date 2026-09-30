@@ -66,12 +66,16 @@ stick (KEY1 hold) ─► WAV queue in LittleFS ─► Wi-Fi (home, else S25+ hot
   voltage-based estimate via the M5PM1, plus volts and charging state),
   storage free % and minutes left, and the queue count. "BATTERY LOW" (≤20%)
   appears after saving. Builds; not yet run on the device.
-- **Wi-Fi scan-first and faster uploads (2026-09-30):** one async scan, then
-  join the first listed SSID in range, on its channel and BSSID. If none is
-  seen, try each by name (6 s each). First field test: the scan saw 0 networks
-  while Jay's S25+ hotspot was on (probably set to hidden), so the fallback is needed. Wi-Fi sleep is off, and each memo is read into PSRAM and
-  sent in one write (streaming a File went out in 1460-byte TLS records). The
-  Sent screen and serial log show KB/s. Builds; not yet run on the device.
+- **Wi-Fi joining and faster uploads (2026-09-30):** a scan-first version saw
+  "0 networks" in the field. The cause: the Arduino core ends an async scan after
+  20x max_ms_per_chan (2.4 s at 120 ms) and `scanComplete()` then reports
+  WIFI_SCAN_FAILED. Replaced with join-by-name, trying the last network that
+  worked first (RTC memory), then `WIFI_NETWORKS` order (phone hotspot
+  first, home Wi-Fi second, at Jay's request, since it's mostly used away
+  from home). It moves on early on WL_NO_SSID_AVAIL / WL_CONNECT_FAILED. Wi-Fi
+  sleep is off, and each memo is read into PSRAM and sent in one write (a File
+  stream went out in 1460-byte TLS records). The Sent screen and serial log
+  show KB/s. Jay's hotspot is now 2.4 GHz only (it was mixed 2.4/5).
 - Other ideas: hide the Docker health-check lines in the receiver's access log.
   Jay still has to set up sync for the Memex vault.
 

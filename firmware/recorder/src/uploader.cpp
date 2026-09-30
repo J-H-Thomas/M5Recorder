@@ -13,82 +13,66 @@
 namespace uploader {
 namespace {
 
-constexpr uint32_t SCAN_TIMEOUT_MS    = 5000;
-constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;  // a network the scan found
-constexpr uint32_t BLIND_TIMEOUT_MS   = 6000;  // a network the scan didn't find (hidden?)
+constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;  // per network
+constexpr uint32_t STALE_STATUS_MS    = 1000;  // ignore "not found" this soon after begin()
 constexpr uint32_t NTP_TIMEOUT_MS     = 3000;
+constexpr int      NETWORK_COUNT      = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
+
+// The network that last worked, tried first next time (survives deep sleep).
+RTC_DATA_ATTR int8_t last_network = -1;
 constexpr uint32_t HTTP_TIMEOUT_MS    = 20000;
 constexpr time_t   CLOCK_VALID_AFTER  = 1700000000;  // Nov 2023
 
 bool keyDown(gpio_num_t key) { return digitalRead(key) == LOW; }
 
-// Waits for a WiFi.begin() to connect. False on timeout or KEY1.
-bool waitConnected(gpio_num_t key, const char* ssid, uint32_t timeout_ms) {
+// Joins one network by name. The Wi-Fi driver scans for it itself and reports
+// "no such network" after a couple of seconds, so an absent network costs
+// that, not the full timeout. False on failure, timeout or KEY1.
+bool tryNetwork(gpio_num_t key, const WifiNetwork& net) {
   const uint32_t t0 = millis();
-  while (millis() - t0 < timeout_ms) {
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("wifi: connected to %s in %lu ms (RSSI %d)\n", ssid,
+  WiFi.begin(net.ssid, net.password);
+  while (millis() - t0 < CONNECT_TIMEOUT_MS) {
+    const wl_status_t s = WiFi.status();
+    if (s == WL_CONNECTED) {
+      Serial.printf("wifi: connected to %s in %lu ms (RSSI %d)\n", net.ssid,
                     (unsigned long)(millis() - t0), WiFi.RSSI());
       return true;
     }
-    if (keyDown(key)) { return false; }
+    if (millis() - t0 > STALE_STATUS_MS && (s == WL_NO_SSID_AVAIL || s == WL_CONNECT_FAILED)) {
+      Serial.printf("wifi: %s %s after %lu ms\n", net.ssid,
+                    s == WL_NO_SSID_AVAIL ? "not found" : "refused (password?)",
+                    (unsigned long)(millis() - t0));
+      break;
+    }
+    if (keyDown(key)) { break; }
     delay(20);
   }
-  Serial.printf("wifi: %s didn't connect\n", ssid);
+  if (millis() - t0 >= CONNECT_TIMEOUT_MS) { Serial.printf("wifi: %s timed out\n", net.ssid); }
   WiFi.disconnect();
   return false;
 }
 
-// Scans once and joins the first network in WIFI_NETWORKS that is in range
-// (list order = preference), on the channel and access point the scan found.
-// If the scan finds none of them, tries each by name, which also finds
-// hidden networks (a phone hotspot may be set to hidden).
+// Tries the network that worked last time first (so away from home the
+// hotspot goes first, at home the home network), then the rest in
+// WIFI_NETWORKS order. (A scan-first approach was dropped: the Arduino
+// core gives up on a scan after 20x the per-channel time, 2.4 s at
+// 120 ms, and reported that as zero networks.)
 bool connect(gpio_num_t key) {
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // modem sleep throttles uploads badly; it's off only while awake anyway
 
-  const uint32_t t0 = millis();
-  const int16_t started = WiFi.scanNetworks(true, false, false, 120);  // async, active, 120 ms per channel
-  int16_t found = WIFI_SCAN_RUNNING;
-  while ((found = WiFi.scanComplete()) == WIFI_SCAN_RUNNING && millis() - t0 < SCAN_TIMEOUT_MS) {
-    if (keyDown(key)) { WiFi.scanDelete(); return false; }
-    delay(20);
+  int order[NETWORK_COUNT];
+  int n = 0;
+  if (last_network >= 0 && last_network < NETWORK_COUNT) { order[n++] = last_network; }
+  for (int i = 0; i < NETWORK_COUNT; ++i) {
+    if (i != last_network) { order[n++] = i; }
   }
-  Serial.printf("wifi: scan start %d, result %d after %lu ms\n", started, found,
-                (unsigned long)(millis() - t0));
-  if (found < 0) { found = 0; }
-  for (int i = 0; i < found && i < 12; ++i) {
-    Serial.printf("  %-32s ch %2ld  %4ld dBm\n", WiFi.SSID(i).c_str(), (long)WiFi.channel(i), (long)WiFi.RSSI(i));
-  }
-
-  const WifiNetwork* chosen = nullptr;
-  int best = -1;
-  for (const auto& net : WIFI_NETWORKS) {
-    for (int i = 0; i < found; ++i) {
-      if (WiFi.SSID(i) == net.ssid && (best < 0 || WiFi.RSSI(i) > WiFi.RSSI(best))) { best = i; }
+  for (int k = 0; k < n; ++k) {
+    if (tryNetwork(key, WIFI_NETWORKS[order[k]])) {
+      last_network = order[k];
+      return true;
     }
-    if (best >= 0) { chosen = &net; break; }
-  }
-
-  if (chosen) {
-    const int32_t channel = WiFi.channel(best);
-    uint8_t bssid[6];
-    memcpy(bssid, WiFi.BSSID(best), sizeof(bssid));
-    WiFi.scanDelete();
-    WiFi.begin(chosen->ssid, chosen->password, channel, bssid);
-    if (waitConnected(key, chosen->ssid, CONNECT_TIMEOUT_MS)) { return true; }
-    if (keyDown(key)) { return false; }
-  } else {
-    WiFi.scanDelete();
-  }
-
-  // Not seen by the scan (hidden, or missed): try each by name.
-  for (const auto& net : WIFI_NETWORKS) {
-    if (&net == chosen) { continue; }
-    Serial.printf("wifi: trying %s by name\n", net.ssid);
-    WiFi.begin(net.ssid, net.password);
-    if (waitConnected(key, net.ssid, BLIND_TIMEOUT_MS)) { return true; }
     if (keyDown(key)) { return false; }
   }
   return false;

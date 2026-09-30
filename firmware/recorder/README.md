@@ -7,9 +7,8 @@ turns it into a transcribed note in Obsidian.
 ## Set up
 
 1. Copy `include/secrets.example.h` to `include/secrets.h` (gitignored) and fill in:
-   - `WIFI_NETWORKS`: home Wi-Fi first, then the phone hotspot (the stick scans and
-     joins the first one in range, so order is preference; a hidden network
-     isn't seen by the scan, so it's tried by name afterwards, a few seconds slower). The ESP32 only
+   - `WIFI_NETWORKS`: the phone hotspot first, then home Wi-Fi. The network that
+     worked last time is always tried first, then the rest in this order. The ESP32 only
      does **2.4 GHz**. On the Samsung hotspot, set the band to 2.4 GHz (or a
      setting that includes it), security to WPA2, and "Turn off hotspot
      automatically" to **Never**, otherwise it switches off between memos.
@@ -56,9 +55,9 @@ turns it into a transcribed note in Obsidian.
 - `memo_queue.cpp`: WAV files in LittleFS, `/q/<seq>_<unix time>.wav`, written
   as `.part` and renamed, so a crash never leaves half a memo in the queue.
   The sequence number is kept in NVS.
-- `uploader.cpp`: scans once (about 1.5 s) and joins the first listed network in
-  range on the channel it was found on, with Wi-Fi power-save off. If the scan
-  finds none of them it tries each by name (6 s each), which covers hidden networks. It syncs the clock over NTP if
+- `uploader.cpp`: joins networks by name, last-good first. A network that isn't
+  there is reported by the Wi-Fi driver after its own scan (a couple of seconds),
+  so it moves on without waiting out the 8 s timeout. Wi-Fi power-save is off. It syncs the clock over NTP if
   it isn't set (the clock keeps running through deep sleep), then POSTs each
   memo over HTTPS (read into PSRAM and sent in one write) with the Let's Encrypt
   roots in `ca_certs.h`. It deletes a
