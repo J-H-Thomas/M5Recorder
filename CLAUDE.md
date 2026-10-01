@@ -60,7 +60,10 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
   It syncs to Jay's phone.
 - Pangolin resource "m5-memos" → the MS-01's LAN address, port 8090, on site
   "Unraid". Public name `memos.asdf.ac`. Pangolin login is on, with bypass rules
-  for `/upload` and `/health` only; the receiver's bearer token protects those.
+  for `/upload`, `/heartbeat` and `/health` only; the receiver's bearer token
+  protects those. **Any new path the stick calls needs its own bypass rule**:
+  otherwise Pangolin answers with a 302 to its login page. That's how the first
+  heartbeats failed (2026-10-01).
 - **TLS:** Let's Encrypt "Gen Y" chain: leaf ← YR1 ← ISRG Root YR (sent
   cross-signed by ISRG Root X1). The stick's mbedTLS (ESP-IDF 4.4) has **no
   TLS 1.3**; the server also offers TLS 1.2 with ECDHE-RSA-AES-GCM. `ca_certs.h`

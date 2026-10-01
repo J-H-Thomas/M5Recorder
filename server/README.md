@@ -124,12 +124,15 @@ Add a resource for the receiver, e.g. `memos.<your domain>` → `http://<ms01 LA
 through the site whose Newt runs on the home network. The stick can't sign in
 through Pangolin's login page, so either turn authentication off for this
 resource, or keep it on and add rules that **bypass auth for the paths
-`/upload` and `/health`**. The receiver's token check is what protects it.
+`/upload`, `/heartbeat` and `/health`**. The receiver's token check is what
+protects them. Every path the stick calls needs a bypass rule: anything else
+gets a 302 to the login page, which the stick treats as a failure.
 Then, from outside the home network (a phone on mobile data):
 
 ```sh
 curl https://memos.<domain>/health
-curl -i -X POST https://memos.<domain>/upload                 # expect 401
+curl -i -X POST https://memos.<domain>/upload                 # expect 401 {"detail":"bad token"}
+curl -i -X POST https://memos.<domain>/heartbeat              # expect 401 {"detail":"bad token"}, not a 302
 ```
 
 ## Run locally (development)
