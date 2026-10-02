@@ -1,5 +1,11 @@
 #include "audio.h"
 
+// 1 = switch the LCD + codec rail (L3B) off in sleep (an experiment build,
+// env m5sticks3-l3b-off). Normal builds keep it on so audio is live at once.
+#ifndef L3B_OFF_IN_SLEEP
+#define L3B_OFF_IN_SLEEP 0
+#endif
+
 #include <M5Unified.h>
 #include <driver/i2s.h>
 
@@ -126,8 +132,12 @@ bool start(gpio_num_t key_pin) {
   buf = (int16_t*)heap_caps_malloc(BUFFER_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
 
   M5.In_I2C.begin(I2C_NUM_1, GPIO_NUM_47, GPIO_NUM_48);
-  // L3B normally stays on through sleep; this is a no-op then.
+  // L3B normally stays on through sleep; this is a no-op then. If it was off
+  // (L3B_OFF_IN_SLEEP builds), give the ES8311 a moment to power up before
+  // talking to it.
+  const bool l3b_was_on = M5.In_I2C.readRegister8(PM1_ADDR, PM1_GPIO_OUT, PM1_FREQ) & PM1_L3B_BIT;
   M5.In_I2C.bitOn(PM1_ADDR, PM1_GPIO_OUT, PM1_L3B_BIT, PM1_FREQ);
+  if (!l3b_was_on) { delay(20); }
   codec_ok = writeRegs(MIC_ON, sizeof(MIC_ON) / sizeof(MIC_ON[0]));
   M5.In_I2C.release();  // M5GFX probes these pins during M5.begin()
 
@@ -177,6 +187,11 @@ void codecOff() {
   // Works whether or not M5.begin() has run (a rejected press skips it).
   M5.In_I2C.begin(I2C_NUM_1, GPIO_NUM_47, GPIO_NUM_48);
   writeRegs(MIC_OFF, sizeof(MIC_OFF) / sizeof(MIC_OFF[0]));
+#if L3B_OFF_IN_SLEEP
+  // Experiment: power the LCD + codec rail down for sleep, to measure what
+  // keeping it on costs (recordings then lose ~1 s to codec warm-up).
+  M5.In_I2C.bitOff(PM1_ADDR, PM1_GPIO_OUT, PM1_L3B_BIT, PM1_FREQ);
+#endif
 }
 
 }  // namespace audio
