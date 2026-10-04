@@ -138,7 +138,15 @@ bool start(gpio_num_t key_pin) {
   const bool l3b_was_on = M5.In_I2C.readRegister8(PM1_ADDR, PM1_GPIO_OUT, PM1_FREQ) & PM1_L3B_BIT;
   M5.In_I2C.bitOn(PM1_ADDR, PM1_GPIO_OUT, PM1_L3B_BIT, PM1_FREQ);
   cold_start = !l3b_was_on;
-  if (cold_start) { delay(20); }
+  if (cold_start) {
+    delay(20);
+    // After a cold power-up the codec delivered its first audio at exactly
+    // 1026 ms every time (fast VMID charge made no difference): a fixed
+    // power-up timer, not a capacitor. Espressif's ES8311 driver zeroes the
+    // power-up/down timing registers before starting the codec; do the same.
+    M5.In_I2C.writeRegister8(ES8311_ADDR, 0x0B, 0x00, ES8311_FREQ);
+    M5.In_I2C.writeRegister8(ES8311_ADDR, 0x0C, 0x00, ES8311_FREQ);
+  }
   codec_ok = writeRegs(MIC_ON, sizeof(MIC_ON) / sizeof(MIC_ON[0]));
   if (cold_start) {
     // Fast-charge the codec's reference; finishPowerUp() returns it to normal.
