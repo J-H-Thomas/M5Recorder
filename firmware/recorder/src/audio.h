@@ -9,6 +9,12 @@
 
 #include <Arduino.h>
 
+// 1 = switch the LCD + codec rail (L3B) off in sleep (an experiment build,
+// env m5sticks3-l3b-off). Normal builds keep it on so audio is live at once.
+#ifndef L3B_OFF_IN_SLEEP
+#define L3B_OFF_IN_SLEEP 0
+#endif
+
 namespace audio {
 
 constexpr uint32_t SAMPLE_RATE = 16000;
@@ -21,6 +27,19 @@ bool start(gpio_num_t key_pin);
 
 // Samples captured so far (index of the next one).
 size_t currentIndex();
+
+// True if the codec was powered up this wake (L3B was off in sleep). Then its
+// reference is fast-charging, and finishPowerUp() (after M5.begin(), when the
+// internal I2C bus is ours again) returns it to normal.
+bool coldStart();
+void finishPowerUp();
+
+// ms from capture start to the first non-zero sample (-1: none): how long the
+// codec took to deliver audio.
+int32_t firstAudioMs();
+
+// Sample index where the memo starts (set by arm()).
+size_t startIndex();
 
 // Marks the memo as starting at sample `start_index`; from now on releasing
 // KEY1 (debounced) or reaching MAX_SECONDS ends the capture.

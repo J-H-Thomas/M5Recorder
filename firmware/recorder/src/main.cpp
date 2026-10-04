@@ -238,7 +238,14 @@ void saveRecording(bool mic_ok, bool fs_ok) {
   const size_t n = audio::sampleCount();
   const float seconds = (float)n / audio::SAMPLE_RATE;
   Serial.printf("recorded %.1f s (codec %s)\n", seconds, audio::codecOk() ? "ok" : "FAILED");
-  char detail[96];
+  // How long the codec took to deliver audio, against where the memo starts
+  // (second press minus pre-roll): anything past that start is speech lost.
+  const int32_t first_audio_ms = audio::firstAudioMs();
+  const int32_t memo_start_ms = (int32_t)(audio::startIndex() * 1000 / audio::SAMPLE_RATE);
+  const int32_t lost_ms = first_audio_ms < 0 ? -1 : std::max<int32_t>(first_audio_ms - memo_start_ms, 0);
+  Serial.printf("codec: %s start, first audio %ld ms after capture start, memo starts at %ld ms, lost %ld ms\n",
+                audio::coldStart() ? "cold" : "warm", (long)first_audio_ms, (long)memo_start_ms, (long)lost_ms);
+  char detail[160];
 
   if (!mic_ok) {
     show("Mic error", audio::codecOk() ? "I2S or memory" : "codec not responding");
@@ -261,8 +268,13 @@ void saveRecording(bool mic_ok, bool fs_ok) {
         len += snprintf(detail + len, sizeof(detail) - len, "\n\nBATTERY LOW: %ld%%", (long)battery);
       }
       if (memo_queue::freeBytes() < QUEUE_WARN_SECONDS * BYTES_PER_SECOND) {
-        snprintf(detail + len, sizeof(detail) - len, "\n\nQUEUE NEARLY FULL");
+        len += snprintf(detail + len, sizeof(detail) - len, "\n\nQUEUE NEARLY FULL");
       }
+#if L3B_OFF_IN_SLEEP
+      // Experiment build: show the codec warm-up so it can be read without a cable.
+      snprintf(detail + len, sizeof(detail) - len, "\n\n%s codec: audio at %ld ms\nmemo start %ld ms\nlost %ld ms",
+               audio::coldStart() ? "cold" : "warm", (long)first_audio_ms, (long)memo_start_ms, (long)lost_ms);
+#endif
       show("Saved", detail);
     } else {
       show("Queue full", "memo not saved");
@@ -539,6 +551,7 @@ void setup() {
     Serial.printf("led: PWR_CFG was 0x%02X, LED_EN turned off\n", pwr_cfg);
   }
   readTelemetry();
+  if (recording) { audio::finishPowerUp(); }  // the internal I2C bus is ours again
   if (recording) {
     Serial.printf("gesture: down at start %d, released %lu ms, pressed %lu ms, index %u\n",
                   (int)g.down_at_start, (unsigned long)g.released_ms, (unsigned long)g.pressed_ms,

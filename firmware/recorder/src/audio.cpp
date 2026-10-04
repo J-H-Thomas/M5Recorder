@@ -1,11 +1,5 @@
 #include "audio.h"
 
-// 1 = switch the LCD + codec rail (L3B) off in sleep (an experiment build,
-// env m5sticks3-l3b-off). Normal builds keep it on so audio is live at once.
-#ifndef L3B_OFF_IN_SLEEP
-#define L3B_OFF_IN_SLEEP 0
-#endif
-
 #include <M5Unified.h>
 #include <driver/i2s.h>
 
@@ -41,6 +35,11 @@ constexpr uint8_t MIC_OFF[][2] = {
   {0x0E, 0x6A},
   {0x00, 0x00},  // CSM power down
 };
+// REG0D VMIDSEL (bits 1:0): 01 = start up VMID with normal-speed charge (what
+// M5Unified uses), 11 = start up with fast charge. After a cold power-up of the
+// codec (L3B was off) the normal charge left about 1 s of silence.
+constexpr uint8_t REG0D_VMID_NORMAL = 0x01;
+constexpr uint8_t REG0D_VMID_FAST   = 0x03;
 
 constexpr size_t  READ_FRAMES   = 256;  // stereo frames per i2s_read (16 ms)
 constexpr int32_t GAIN          = 8;    // matches M5Unified's default (magnification 16, over_sampling 2)
@@ -56,6 +55,7 @@ volatile bool     stop_req = false;
 volatile bool     done = true;
 bool              running = false;
 bool              codec_ok = false;
+bool              cold_start = false;  // the codec was powered up this wake (L3B was off)
 gpio_num_t        key = GPIO_NUM_NC;
 
 bool writeRegs(const uint8_t (*regs)[2], size_t n) {
@@ -137,8 +137,13 @@ bool start(gpio_num_t key_pin) {
   // talking to it.
   const bool l3b_was_on = M5.In_I2C.readRegister8(PM1_ADDR, PM1_GPIO_OUT, PM1_FREQ) & PM1_L3B_BIT;
   M5.In_I2C.bitOn(PM1_ADDR, PM1_GPIO_OUT, PM1_L3B_BIT, PM1_FREQ);
-  if (!l3b_was_on) { delay(20); }
+  cold_start = !l3b_was_on;
+  if (cold_start) { delay(20); }
   codec_ok = writeRegs(MIC_ON, sizeof(MIC_ON) / sizeof(MIC_ON[0]));
+  if (cold_start) {
+    // Fast-charge the codec's reference; finishPowerUp() returns it to normal.
+    codec_ok &= M5.In_I2C.writeRegister8(ES8311_ADDR, 0x0D, REG0D_VMID_FAST, ES8311_FREQ);
+  }
   M5.In_I2C.release();  // M5GFX probes these pins during M5.begin()
 
   if (!buf || !codec_ok || !startI2s()) { return false; }
@@ -154,6 +159,22 @@ bool start(gpio_num_t key_pin) {
 }
 
 size_t currentIndex() { return count; }
+
+bool coldStart() { return cold_start; }
+size_t startIndex() { return start_at; }
+
+void finishPowerUp() {
+  if (!cold_start) { return; }
+  M5.In_I2C.writeRegister8(ES8311_ADDR, 0x0D, REG0D_VMID_NORMAL, ES8311_FREQ);
+}
+
+int32_t firstAudioMs() {
+  if (!buf) { return -1; }
+  for (size_t i = 0; i < count; ++i) {
+    if (buf[i] != 0) { return (int32_t)(i * 1000 / SAMPLE_RATE); }
+  }
+  return -1;
+}
 
 void arm(size_t start_index) {
   start_at = std::min(start_index, (size_t)count);
