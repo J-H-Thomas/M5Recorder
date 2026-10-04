@@ -185,11 +185,7 @@ void addCommonHeaders(HTTPClient& http, const String& device, const Telemetry& t
   http.addHeader("X-Queue", String((unsigned)queued));
   http.addHeader("X-Set-Aside", String((unsigned)memo_queue::badCount()));
   http.addHeader("X-Ignored", String((unsigned)t.ignored));
-#if defined(L3B_OFF_IN_SLEEP) && L3B_OFF_IN_SLEEP
-  http.addHeader("X-Firmware", FW_VERSION "-l3boff");  // experiment build: tell its readings apart in HA
-#else
   http.addHeader("X-Firmware", FW_VERSION);
-#endif
 }
 
 // Where to send heartbeats: the upload URL with /upload replaced.

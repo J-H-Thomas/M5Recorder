@@ -9,10 +9,12 @@
 
 #include <Arduino.h>
 
-// 1 = switch the LCD + codec rail (L3B) off in sleep (an experiment build,
-// env m5sticks3-l3b-off). Normal builds keep it on so audio is live at once.
+// 1 (default) = switch the LCD + codec rail (L3B) off in sleep. Keeping it on
+// cost about 3 mA (a charge lasted ~2.5 days instead of weeks). With the
+// ES8311's power-up timing zeroed (see audio::start()), the codec delivers
+// audio ~2 ms after power-up, so nothing is lost by switching it off.
 #ifndef L3B_OFF_IN_SLEEP
-#define L3B_OFF_IN_SLEEP 0
+#define L3B_OFF_IN_SLEEP 1
 #endif
 
 namespace audio {

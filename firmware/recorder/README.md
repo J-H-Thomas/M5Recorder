@@ -73,11 +73,12 @@ turns it into a transcribed note in Obsidian.
 
 ## How it works
 
-- `audio.cpp`: the fast-wake path from `firmware/wake_test` (see `CLAUDE.md`).
-  It keeps the codec rail (L3B) on through sleep, and on a KEY1 wake sets up
-  the ES8311 and I2S before `M5.begin()`. A capture task records into PSRAM from
-  the first press. After the gesture is confirmed (`arm()`), it stops when KEY1
-  is released or at 60 s.
+- `audio.cpp`: the fast-wake path (see `CLAUDE.md`).
+  - The codec rail (L3B) is off in sleep, which saves about 3 mA.
+  - On a KEY1 wake it powers the codec up with its power-up timer zeroed, so
+    audio starts about 2 ms later, and sets up I2S before `M5.begin()`.
+  - A capture task records into PSRAM from the first press. After the gesture
+    is confirmed (`arm()`), it stops when KEY1 is released or at 60 s.
 - `memo_queue.cpp`: WAV files in LittleFS at `/q/<seq>_<unix time>_<epoch>.wav`.
   - Written as `.part` and renamed, so a crash never leaves half a memo in the
     queue; leftovers are cleaned at mount.

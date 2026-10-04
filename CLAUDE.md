@@ -97,10 +97,23 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
 ## How it works now (and why)
 
 **Stick** (`firmware/recorder/src`):
-- **Fast start:** the codec rail (L3B) stays on in sleep. On a KEY1 wake, the
-  ES8311 and I2S are set up and a capture task starts before `M5.begin()`: audio
-  is live about 55 ms after the app starts. With L3B off in sleep, the ES8311
-  sent zeros for about 1 s, and `M5.begin()` alone takes about 400 ms.
+- **Fast start, with the codec rail (L3B) off in sleep:** on a KEY1 wake,
+  `audio::start()` powers L3B up, waits 20 ms, **zeroes ES8311 REG0B/REG0C**
+  (power-up timing, as Espressif's driver does), and writes the mic
+  registers. It then starts I2S and a capture task, all before `M5.begin()`
+  (which alone takes about 400 ms). The first audio arrives about 2 ms after
+  capture starts.
+- **How we got here (2026-10-02 to 04):**
+  - Originally L3B stayed on in sleep because, with the default REG0B/0C, the
+    codec sent exact zeros for 1026 ms after power-up. That clipped the first
+    word, and fast VMID charge (REG0D 0x03) made no difference.
+  - But HA showed L3B-on costing about 3 mA asleep (a quiet 6 h cost 3–9 %, about
+    2.5 days per charge) against about 1 % per 6 h with it off (weeks).
+  - Zeroing REG0B/0C fixed the warm-up. Jay reports clear audio and perfect
+    transcripts, with a slightly louder click at the start and end. A short
+    software fade would hide it if it ever matters.
+  - `L3B_OFF_IN_SLEEP` (default 1, in `audio.h`) can switch back to the old
+    behaviour.
 - **Gesture** (`detectGesture()`): the first press is released within 600 ms of
   app start, the second press comes within 600 ms, with a 30 ms debounce. Jay's
   presses measure 120–143 ms and 100–150 ms. It's checked before `M5.begin()`,
@@ -197,8 +210,9 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
   `secrets.h`; Jay mostly records away from home.
 - **Press, release, press and hold** to record (not a side-button lock). The
   side button uses the same gesture.
-- Max memo 60 s. Battery: 2+ days per charge was the bar; it will be measured
-  in Phase 2.
+- Max memo 60 s.
+- Battery: 2+ days per charge was the bar. With L3B off in sleep it's weeks
+  (about 1 % per quiet 6 h, from HA's battery history).
 
 ## Hardware facts
 

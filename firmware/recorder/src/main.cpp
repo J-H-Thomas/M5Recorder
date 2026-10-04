@@ -270,11 +270,6 @@ void saveRecording(bool mic_ok, bool fs_ok) {
       if (memo_queue::freeBytes() < QUEUE_WARN_SECONDS * BYTES_PER_SECOND) {
         len += snprintf(detail + len, sizeof(detail) - len, "\n\nQUEUE NEARLY FULL");
       }
-#if L3B_OFF_IN_SLEEP
-      // Experiment build: show the codec warm-up so it can be read without a cable.
-      snprintf(detail + len, sizeof(detail) - len, "\n\n%s codec: audio at %ld ms\nmemo start %ld ms\nlost %ld ms",
-               audio::coldStart() ? "cold" : "warm", (long)first_audio_ms, (long)memo_start_ms, (long)lost_ms);
-#endif
       show("Saved", detail);
     } else {
       show("Queue full", "memo not saved");

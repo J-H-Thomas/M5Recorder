@@ -102,7 +102,7 @@ After carrying the stick for an evening:
 
 ## Phase 2: know that it's working
 
-**Built 2026-09-30 (branch `phase2-status`).** Jay chose Home Assistant rather
+**Done** (built 2026-09-30, merged 2026-10-02). Jay chose Home Assistant rather
 than a vault note for status.
 - The receiver publishes an **M5Recorder** device over MQTT discovery (12
   sensors) to HA's Mosquitto broker. The stick reports with every upload and
@@ -112,10 +112,18 @@ than a vault note for status.
   memos stuck transcribing for 1 h.
 - A low-battery and fault-reset guard, a "queue nearly full" warning, and quieter
   logs.
-- **Deployed and flashed; the device appeared in HA.**
-- The queue-count fix is flashed and confirmed in HA (Memos waiting 0).
-- **Still to do:** see a heartbeat after 6 h, get a days-left estimate after a day or two, the home Wi-Fi test, then
-  merge to `main`.
+- Confirmed:
+  - heartbeats arrive every 6 h (once Pangolin had a `/heartbeat` bypass rule);
+  - days-left works;
+  - home Wi-Fi works (hotspot not found → home network in 1.4 s, then direct).
+- **Battery finding and fix (2026-10-02 to 04):**
+  - The telemetry showed about 3 mA asleep, about 2.5 days per charge. The cause
+    was the LCD + codec rail (L3B) kept on in sleep. With it off, a quiet 6 h costs
+    about 1 % (weeks per charge).
+  - It had been kept on because the codec took 1026 ms to deliver audio after
+    power-up, clipping the first word. Zeroing ES8311 REG0B/0C (power-up
+    timing) cut that to about 2 ms.
+  - L3B is now off in sleep by default, with no clipping.
 
 1. **Battery telemetry.** Stick:
    - Read the battery at wake, before Wi-Fi (TX sags the voltage).

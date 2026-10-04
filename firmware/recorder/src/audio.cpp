@@ -132,18 +132,19 @@ bool start(gpio_num_t key_pin) {
   buf = (int16_t*)heap_caps_malloc(BUFFER_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
 
   M5.In_I2C.begin(I2C_NUM_1, GPIO_NUM_47, GPIO_NUM_48);
-  // L3B normally stays on through sleep; this is a no-op then. If it was off
-  // (L3B_OFF_IN_SLEEP builds), give the ES8311 a moment to power up before
-  // talking to it.
+  // L3B is off in sleep, so this powers the codec (and LCD) up; give the
+  // ES8311 a moment before talking to it. If it was already on, it's a no-op.
   const bool l3b_was_on = M5.In_I2C.readRegister8(PM1_ADDR, PM1_GPIO_OUT, PM1_FREQ) & PM1_L3B_BIT;
   M5.In_I2C.bitOn(PM1_ADDR, PM1_GPIO_OUT, PM1_L3B_BIT, PM1_FREQ);
   cold_start = !l3b_was_on;
   if (cold_start) {
     delay(20);
-    // After a cold power-up the codec delivered its first audio at exactly
-    // 1026 ms every time (fast VMID charge made no difference): a fixed
-    // power-up timer, not a capacitor. Espressif's ES8311 driver zeroes the
-    // power-up/down timing registers before starting the codec; do the same.
+    // With the defaults, the codec's first audio after a cold power-up came at
+    // exactly 1026 ms every time (a fixed power-up timer; fast VMID charge
+    // made no difference) and clipped the first word. Zeroing the power-up/
+    // down timing registers, as Espressif's ES8311 driver does, brought it to
+    // about 2 ms (tested 2026-10-04; transcripts unaffected, a slightly louder
+    // click at the start).
     M5.In_I2C.writeRegister8(ES8311_ADDR, 0x0B, 0x00, ES8311_FREQ);
     M5.In_I2C.writeRegister8(ES8311_ADDR, 0x0C, 0x00, ES8311_FREQ);
   }
@@ -217,8 +218,7 @@ void codecOff() {
   M5.In_I2C.begin(I2C_NUM_1, GPIO_NUM_47, GPIO_NUM_48);
   writeRegs(MIC_OFF, sizeof(MIC_OFF) / sizeof(MIC_OFF[0]));
 #if L3B_OFF_IN_SLEEP
-  // Experiment: power the LCD + codec rail down for sleep, to measure what
-  // keeping it on costs (recordings then lose ~1 s to codec warm-up).
+  // Power the LCD + codec rail down for sleep (about 3 mA otherwise).
   M5.In_I2C.bitOff(PM1_ADDR, PM1_GPIO_OUT, PM1_L3B_BIT, PM1_FREQ);
 #endif
 }
