@@ -44,11 +44,13 @@ audio, so the memo is never lost from view.
 ```markdown
 ---
 created: 2026-09-30T14:12:05+01:00
+day: "[[2026-09-30]]"
 duration: 12.4
 device: aabbccddeeff
 memo_id: aabbccddeeff-1a2b3c4d-17
 time_source: device
-status: done
+transcript: done
+status: inbox
 tags: [memo]
 ---
 ![[Memos/audio/2026-09-30 141205.wav]]
@@ -56,7 +58,10 @@ tags: [memo]
 Remember to book the car in for its MOT next week.
 ```
 
-- `status`: `transcribing`, then `done`, or `failed` after 5 attempts.
+- `day`: a link to that day's daily note, so memos show in its backlinks.
+- `transcript`: `transcribing`, then `done`, or `failed` after 5 attempts.
+- `status`: the review state shared with the other Memex pipelines. The receiver
+  always writes `inbox`; you set it to `processed` once the memo is dealt with.
 - `time_source`:
   - `device`: the stick's clock;
   - `corrected`: the stick's clock was off, and the server shifted it;

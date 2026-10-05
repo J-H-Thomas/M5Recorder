@@ -113,7 +113,7 @@ def test_upload_writes_placeholder_then_transcript(settings):
         r = upload(client)
         assert r.status_code == 200 and r.json() == {"status": "queued"}
         placeholder = note_text(settings)
-        assert "status: transcribing" in placeholder and "transcribing" in placeholder.split("---")[-1]
+        assert "transcript: transcribing" in placeholder and "status: inbox" in placeholder and "transcribing" in placeholder.split("---")[-1]
         app.state.worker.run_pending()
 
     assert (settings.audio_dir / f"{STEM}.wav").exists()
@@ -122,7 +122,8 @@ def test_upload_writes_placeholder_then_transcript(settings):
     assert "duration: 1.0" in note
     assert "device: aabbccddeeff" in note
     assert "time_source: device" in note
-    assert "status: done" in note
+    assert "transcript: done" in note and "status: inbox" in note
+    assert 'day: "[[2026-09-21]]"' in note
     assert f"![[Memos/audio/{STEM}.wav]]" in note
     assert note.rstrip().endswith("Buy milk.")
     assert app.state.store.get("aabbccddeeff-1").status == "done"
@@ -233,7 +234,7 @@ def test_failed_transcription_is_retried_then_gives_up_with_a_note(settings, mon
     memo = store.get("aabbccddeeff-1")
     assert memo.status == "gave_up" and memo.attempts == worker_mod.MAX_ATTEMPTS
     note = note_text(settings)
-    assert "status: failed" in note and "transcription failed" in note
+    assert "transcript: failed" in note and "transcription failed" in note
     assert f"![[Memos/audio/{STEM}.wav]]" in note
     assert len(list(settings.notes_dir.glob("*.md"))) == 1
 

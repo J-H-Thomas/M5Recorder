@@ -89,7 +89,7 @@ class Worker:
         created = datetime.fromtimestamp(memo.created, ZoneInfo(s.timezone))
         notes.atomic_write_bytes(s.vault_dir / note_path, notes.render_note(
             created=created, duration=memo.duration, device=memo.device, memo_id=memo.memo_id,
-            audio_rel=memo.audio_path, body=body, status=status, time_source=memo.time_source,
+            audio_rel=memo.audio_path, body=body, transcript=status, time_source=memo.time_source,
         ).encode("utf-8"))
 
     # --- queue -----------------------------------------------------------------
