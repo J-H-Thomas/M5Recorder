@@ -3,6 +3,7 @@ transcriptions resume or retry."""
 
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,13 @@ _ADDED_COLUMNS = {
     "time_source": "TEXT",
     "attempts": "INTEGER NOT NULL DEFAULT 0",
     "next_attempt": "REAL",
+    # Transcription timing (read by the meeting-processor's report)
+    "transcribe_ms": "INTEGER",
+    "audio_s": "REAL",
+    "rtf": "REAL",                  # transcribe time / audio length
+    "cold": "INTEGER",              # first transcription after the model loaded
+    "duration_after_vad": "REAL",   # seconds of speech left after VAD
+    "transcribed_at": "REAL",
 }
 
 
@@ -119,6 +127,17 @@ class Store:
             self._db.execute(
                 "UPDATE memos SET status = ?, note_path = ?, error = NULL, next_attempt = NULL WHERE memo_id = ?",
                 (DONE, note_path, memo_id),
+            )
+
+    def set_timing(self, memo_id: str, transcribe_ms: int, audio_s: float, cold: bool | None = None,
+                   duration_after_vad: float | None = None) -> None:
+        rtf = round(transcribe_ms / 1000 / audio_s, 4) if audio_s else None
+        with self._lock:
+            self._db.execute(
+                "UPDATE memos SET transcribe_ms = ?, audio_s = ?, rtf = ?, cold = ?, duration_after_vad = ?,"
+                " transcribed_at = ? WHERE memo_id = ?",
+                (transcribe_ms, audio_s, rtf, None if cold is None else int(cold), duration_after_vad,
+                 time.time(), memo_id),
             )
 
     def mark_failed(self, memo_id: str, error: str, next_attempt: float) -> int:

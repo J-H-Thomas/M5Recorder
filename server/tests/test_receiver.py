@@ -130,6 +130,28 @@ def test_upload_writes_placeholder_then_transcript(settings):
     assert len(list(settings.notes_dir.glob("*.md"))) == 1  # the placeholder was replaced, not duplicated
 
 
+def test_transcription_timing_is_recorded(settings, tmp_path):
+    fake = FakeTranscriber("Buy milk.")
+    fake.last = {"transcribe_ms": 500, "cold": True, "duration_after_vad": 0.8}
+    app, client = client_for(settings, fake)
+    with client:
+        upload(client)
+        app.state.worker.run_pending()
+    db = sqlite3.connect(settings.data_dir / "memos.db")
+    row = db.execute("SELECT transcribe_ms, audio_s, rtf, cold, duration_after_vad FROM memos").fetchone()
+    assert row == (500, 1.0, 0.5, 1, 0.8)
+
+
+def test_timing_is_measured_without_transcriber_stats(settings):
+    app, client = client_for(settings, FakeTranscriber())
+    with client:
+        upload(client)
+        app.state.worker.run_pending()
+    db = sqlite3.connect(settings.data_dir / "memos.db")
+    ms, cold = db.execute("SELECT transcribe_ms, cold FROM memos").fetchone()
+    assert ms is not None and ms >= 0 and cold is None
+
+
 def test_same_second_gets_distinct_files(settings):
     app, client = client_for(settings, FakeTranscriber())
     with client:

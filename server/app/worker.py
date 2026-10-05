@@ -31,8 +31,14 @@ class WhisperTranscriber:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._model = None
+        # Timings of the last call, for the memos table: transcribe_ms (the
+        # segment generator's consumption included, since that's where the
+        # work happens; the model load excluded), cold (first call after the
+        # model loaded) and duration_after_vad (seconds of speech kept).
+        self.last: dict = {}
 
     def __call__(self, audio: Path) -> str:
+        cold = self._model is None
         if self._model is None:
             from faster_whisper import WhisperModel
 
@@ -44,10 +50,14 @@ class WhisperTranscriber:
                 compute_type=s.whisper_compute,
                 download_root=str(s.whisper_model_dir) if s.whisper_model_dir else None,
             )
-        segments, _ = self._model.transcribe(
+        t0 = time.monotonic()
+        segments, info = self._model.transcribe(
             load_audio(audio), language=self._settings.language, vad_filter=True, beam_size=5
         )
-        return " ".join(seg.text.strip() for seg in segments)
+        text = " ".join(seg.text.strip() for seg in segments)
+        self.last = {"transcribe_ms": int((time.monotonic() - t0) * 1000), "cold": cold,
+                     "duration_after_vad": getattr(info, "duration_after_vad", None)}
+        return text
 
 
 def load_audio(path: Path):
@@ -139,9 +149,16 @@ class Worker:
             note_path = self.new_note_path(memo.audio_path)
             self._store.set_note_path(memo_id, note_path)
         try:
+            t0 = time.monotonic()
             text = self._transcribe(self._settings.vault_dir / memo.audio_path)
+            timing = dict(getattr(self._transcribe, "last", None) or {})
+            timing.setdefault("transcribe_ms", int((time.monotonic() - t0) * 1000))
             self.write_note(memo, note_path, text.strip() or notes.NO_SPEECH, "done")
             self._store.mark_done(memo_id, note_path)
+            try:  # bookkeeping only: never fails a transcribed memo
+                self._store.set_timing(memo_id, audio_s=memo.duration, **timing)
+            except Exception:
+                log.exception("couldn't record the timing of %s", memo_id)
             log.info("memo %s -> %s", memo_id, Path(note_path).name)
         except Exception as e:
             attempts = self._store.mark_failed(

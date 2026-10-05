@@ -110,6 +110,12 @@ Volumes: `/vault` (the Obsidian vault), `/data` (the memo database), and
 `/models` (downloaded Whisper models, about 1.6 GB for large-v3-turbo; the
 model downloads on the first memo).
 
+Each transcription's timing is kept in the memo database for reporting
+(other tools can read `memos.db` read-only): `transcribe_ms` (the model load
+excluded), `audio_s`, `rtf` (transcribe time / audio length), `cold` (the
+first transcription after the model loaded), `duration_after_vad` (seconds of
+speech left after voice-activity detection) and `transcribed_at`.
+
 ## Deploy on Unraid
 
 1. Copy this `server/` folder to the MS-01 (e.g. `/mnt/user/appdata/m5recorder/src`)
