@@ -124,6 +124,11 @@ than a vault note for status.
     power-up, clipping the first word. Zeroing ES8311 REG0B/0C (power-up
     timing) cut that to about 2 ms.
   - L3B is now off in sleep by default, with no clipping.
+  - A full discharge with L3B off (4–8 Oct) lasted about 4.5 days. Near-idle
+    drain was still about 15 %/day (~1.5–2 mA). The cause: M5Unified's default
+    `output_power` keeps the Grove port's 5 V boost on through sleep. It's now
+    turned off (branch `fix-grove-boost`). **To confirm:** the idle slope in HA
+    over a couple of days.
 
 1. **Battery telemetry.** Stick:
    - Read the battery at wake, before Wi-Fi (TX sags the voltage).
