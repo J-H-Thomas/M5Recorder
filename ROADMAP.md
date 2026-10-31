@@ -118,8 +118,8 @@ than a vault note for status.
   - home Wi-Fi works (hotspot not found → home network in 1.4 s, then direct).
 - **Battery finding and fix (2026-10-02 to 04):**
   - The telemetry showed about 3 mA asleep, about 2.5 days per charge. The cause
-    was the LCD + codec rail (L3B) kept on in sleep. With it off, a quiet 6 h costs
-    about 1 % (weeks per charge).
+    was the LCD + codec rail (L3B) kept on in sleep. Turning it off took a charge
+    to about 4.5 days (an early "1 % per quiet 6 h" reading was misleading).
   - It had been kept on because the codec took 1026 ms to deliver audio after
     power-up, clipping the first word. Zeroing ES8311 REG0B/0C (power-up
     timing) cut that to about 2 ms.
@@ -127,8 +127,9 @@ than a vault note for status.
   - A full discharge with L3B off (4–8 Oct) lasted about 4.5 days. Near-idle
     drain was still about 15 %/day (~1.5–2 mA). The cause: M5Unified's default
     `output_power` keeps the Grove port's 5 V boost on through sleep. It's now
-    turned off (branch `fix-grove-boost`). **To confirm:** the idle slope in HA
-    over a couple of days.
+    turned off (`9c397e9`, on the stick since 22 Oct).
+  - **Confirmed** (23–31 Oct): 100 → 50 % in 8.4 days, about 6 %/day in light
+    use, so roughly 16 days per charge.
 
 1. **Battery telemetry.** Stick:
    - Read the battery at wake, before Wi-Fi (TX sags the voltage).

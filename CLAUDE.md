@@ -108,7 +108,8 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
     codec sent exact zeros for 1026 ms after power-up. That clipped the first
     word, and fast VMID charge (REG0D 0x03) made no difference.
   - But HA showed L3B-on costing about 3 mA asleep (a quiet 6 h cost 3–9 %, about
-    2.5 days per charge) against about 1 % per 6 h with it off (weeks).
+    2.5 days per charge). Turning it off roughly doubled that to about 4.5 days;
+    most of the rest was the 5 V boost (below).
   - Zeroing REG0B/0C fixed the warm-up. Jay reports clear audio and perfect
     transcripts, with a slightly louder click at the start and end. A short
     software fade would hide it if it ever matters.
@@ -163,6 +164,14 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
   `cfg.output_power = false` (M5.begin() then turns the boost off) and logs
   the bit. **Watch for this pattern:** PM1 outputs that come up on and that
   M5Unified never clears for the StickS3.
+- **Confirmed (23–31 Oct, firmware `9c397e9`):** 100 → 50 % (3.71 V) in 8.4
+  days with 2 memos and 27 ignored presses (pocket knocks), so about 6 % a day
+  and 1–2 % per quiet 6 h. That's roughly **16 days per charge**.
+- **Reading the battery history:** the percentage is derived from voltage, and
+  a LiPo's curve is nearly flat in the middle (about 3.8–4.0 V), so a short
+  window there under-reads the drain. An early "about 1 % per quiet 6 h" (one
+  window near 79 % on 4 Oct) wrongly suggested weeks per charge. Judge the drain
+  over several days, or a whole charge.
 
 **Status in Home Assistant** (Phase 2):
 - The stick sends `X-Battery-mV/-Pct`, `X-Charging`, `X-Queue` (memos left
@@ -219,8 +228,9 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
 - **Press, release, press and hold** to record (not a side-button lock). The
   side button uses the same gesture.
 - Max memo 60 s.
-- Battery: 2+ days per charge was the bar. With L3B off in sleep it's weeks
-  (about 1 % per quiet 6 h, from HA's battery history).
+- Battery: 2+ days per charge was the bar. With L3B and the 5 V boost off in
+  sleep it's about 16 days (about 6 % a day in light use, from HA's battery
+  history, 23–31 Oct).
 
 ## Hardware facts
 
