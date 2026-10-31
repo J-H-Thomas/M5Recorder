@@ -39,6 +39,7 @@ constexpr uint8_t  PM1_ADDR    = 0x6E;
 constexpr uint32_t PM1_FREQ    = 100000;
 constexpr uint8_t  PM1_PWR_CFG = 0x06;
 constexpr uint8_t  PM1_LED_EN  = 1 << 4;  // green LED
+constexpr uint8_t  PM1_BOOST_EN = 1 << 3; // 5 V boost for the Grove port
 
 // Record gesture: press, release, press and hold.
 constexpr uint32_t TAP_MAX_MS   = 600;  // first press must be released by then (ms since app start)
@@ -534,6 +535,10 @@ void setup() {
   cfg.internal_imu = false;
   cfg.internal_rtc = false;
   cfg.internal_mic = false;  // audio.cpp owns the mic's I2S port
+  // M5Unified's default (output_power = true) turns on the PM1's 5 V boost for
+  // the Grove port, and the PM1 keeps it on through deep sleep: about 1.5-2 mA
+  // for nothing (a charge lasted ~4.5 days). With false, M5.begin() turns it off.
+  cfg.output_power = false;
   M5.begin(cfg);
   M5.Display.setBrightness(cause == ESP_SLEEP_WAKEUP_TIMER ? 0 : BRIGHTNESS);
   M5.Display.setFont(&fonts::Font0);
@@ -545,6 +550,7 @@ void setup() {
     M5.In_I2C.bitOff(PM1_ADDR, PM1_PWR_CFG, PM1_LED_EN, PM1_FREQ);
     Serial.printf("led: PWR_CFG was 0x%02X, LED_EN turned off\n", pwr_cfg);
   }
+  Serial.printf("power: 5 V Grove boost %s\n", (pwr_cfg & PM1_BOOST_EN) ? "STILL ON" : "off");
   readTelemetry();
   if (recording) { audio::finishPowerUp(); }  // the internal I2C bus is ours again
   if (recording) {

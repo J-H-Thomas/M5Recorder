@@ -155,6 +155,14 @@ Wi-Fi names, LAN addresses or personal data in files or commit messages.
   never clears it for the StickS3. The firmware clears it after `M5.begin()`;
   the PM1 keeps it through deep sleep. It probably drew more than the rest of
   the sleeping stick.
+- **5 V Grove boost:** M5Unified's `cfg.output_power` defaults to true, which
+  sets PM1 `PWR_CFG` bit 3 `BOOST_EN`. The PM1 then keeps the Grove port's 5 V
+  boost running through deep sleep. After the L3B fix, a near-idle discharge
+  (4–8 Oct, reports only every 6 h) still lost about 15 % per day, roughly
+  1.5–2 mA, and a charge lasted about 4.5 days. The firmware sets
+  `cfg.output_power = false` (M5.begin() then turns the boost off) and logs
+  the bit. **Watch for this pattern:** PM1 outputs that come up on and that
+  M5Unified never clears for the StickS3.
 
 **Status in Home Assistant** (Phase 2):
 - The stick sends `X-Battery-mV/-Pct`, `X-Charging`, `X-Queue` (memos left
